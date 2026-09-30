@@ -144,6 +144,9 @@ class CardRead(Output):
     tags: list[TagRead]
     vote_count: int
     comment_count: int
+    duplicate_count: int
+    related_count: int
+    pending_draft_count: int
 
 
 class BoardColumnView(ColumnRead):

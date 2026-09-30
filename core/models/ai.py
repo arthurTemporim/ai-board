@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, ForeignKey, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import JSON, ForeignKey, String, Text, func, select
+from sqlalchemy.orm import Mapped, column_property, mapped_column
 
 from core.db import Base
+from core.models.card import Card
 from core.models.enums import DraftKind, DraftStatus, RunStatus
 from core.models.types import UTCDateTime, enum_column, utcnow
 
@@ -75,3 +76,12 @@ class Score(Base):
     per_criterion: Mapped[dict] = mapped_column(JSON)
     total: Mapped[float]
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+# Number of AI drafts waiting for a human decision; shown as an indicator on the card.
+Card.pending_draft_count = column_property(
+    select(func.count(Draft.id))
+    .where(Draft.card_id == Card.id, Draft.status == DraftStatus.pending)
+    .correlate_except(Draft)
+    .scalar_subquery()
+)

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, ForeignKey, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import CheckConstraint, ForeignKey, String, Text, UniqueConstraint, func, select
+from sqlalchemy.orm import Mapped, column_property, mapped_column
 
 from core.db import Base
+from core.models.card import Card
 from core.models.enums import LinkKind, LinkStatus
 from core.models.types import UTCDateTime, enum_column, utcnow
 
@@ -53,3 +54,20 @@ class CardProblem(Base):
     )
     status: Mapped[LinkStatus] = mapped_column(enum_column(LinkStatus), default=LinkStatus.suggested)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+def _link_count(kind: LinkKind):
+    return column_property(
+        select(func.count(CardLink.id))
+        .where(
+            (CardLink.card_id == Card.id) | (CardLink.other_card_id == Card.id),
+            CardLink.kind == kind,
+        )
+        .correlate_except(CardLink)
+        .scalar_subquery()
+    )
+
+
+# Drive the duplicate / related indicators on cards (suggested and confirmed links both count).
+Card.duplicate_count = _link_count(LinkKind.duplicate)
+Card.related_count = _link_count(LinkKind.related)

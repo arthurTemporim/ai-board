@@ -84,3 +84,30 @@ def test_feedback_update_and_delete(client, make_card):
 
 def test_timestamps_are_timezone_aware(client, make_card):
     assert make_card()["created_at"].endswith("Z")
+
+
+def test_card_reports_duplicate_related_and_pending_draft_counts(client, session_factory, board, make_card):
+    a, b, c = make_card("A"), make_card("B"), make_card("C")
+    assert (a["duplicate_count"], a["related_count"], a["pending_draft_count"]) == (0, 0, 0)
+
+    from core.models import CardLink, Draft, DraftKind, DraftStatus, LinkKind
+
+    with session_factory() as session:
+        session.add_all(
+            [
+                CardLink(card_id=a["id"], other_card_id=b["id"], kind=LinkKind.duplicate),
+                CardLink(card_id=a["id"], other_card_id=c["id"], kind=LinkKind.related),
+                Draft(card_id=a["id"], kind=DraftKind.tag, payload={"name": "ux"}),
+                Draft(card_id=a["id"], kind=DraftKind.tag, payload={}, status=DraftStatus.rejected),
+            ]
+        )
+        session.commit()
+
+    cards = {c["title"]: c for c in client.get("/api/cards", params={"board_id": board["id"]}).json()}
+    assert (cards["A"]["duplicate_count"], cards["A"]["related_count"], cards["A"]["pending_draft_count"]) == (1, 1, 1)
+    # Links count on both ends; only the card with drafts reports them.
+    assert (cards["B"]["duplicate_count"], cards["B"]["related_count"], cards["B"]["pending_draft_count"]) == (1, 0, 0)
+    assert (cards["C"]["duplicate_count"], cards["C"]["related_count"]) == (0, 1)
+    detail = client.get(f"/api/cards/{a['id']}").json()
+    links = [(link["card_id"], link["kind"]) for link in detail["links"]]
+    assert links == [(b["id"], "duplicate"), (c["id"], "related")]

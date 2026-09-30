@@ -33,3 +33,6 @@ Deviations from the original design, all deliberate:
 - **Migrations live in `migrations/`** (not `alembic/`, which would shadow the installed package).
 - Seed data creates no `CardLink`/`Problem` rows; ground truth is in `data/seed/labels.json` (regenerate with `python -m data.seed.seed --write-labels`).
 - `make seed` wipes existing rows before loading.
+
+## Phase 2 implementation notes (frontend, done)
+See `DECISIONS.md` for the reasoning. In short: drag and drop saves optimistically (this replaces the "everything waits for Save" rule for board moves only; the drawer still has Save); filters are client-side and turn dragging off; no router or UI library; `docker compose` runs the Vite dev server (`make dev`).
