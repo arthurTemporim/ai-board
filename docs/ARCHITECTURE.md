@@ -42,12 +42,15 @@ Layout: `core/models`, `core/repositories`, `core/services` (move/reorder, apply
 - **Interrupts**: `interrupt({kind, payload})`; resume with `Command(resume=value)`; `SqliteSaver`, `thread_id = run_id`.
 - **Failures**: recorded in `ai_call.error` and `state.errors`; steps depending on missing output are skipped; run `succeeded` with warnings, or `failed` if `intake` fails.
 
-## 3. MCP servers (official Python SDK, stdio; `ai/mcp_servers/<name>/server.py`)
-All inputs/outputs are Pydantic models exported as JSON schema; all tools are deterministic.
-- **cards_server**: `get_card(card_id)->Card`; `list_cards(board_id, column_id?, tag?, limit)->Card[]`; `get_card_context(card_id)->{card, comments, feedback, links, problem}`; `save_suggestions(run_id, card_id, suggestions[])->{ids}`; `list_problems(board_id)->Problem[]`; `create_card(board_id, title, description, requester_type)->Card`.
-- **similarity_server**: `embed_card(card_id)->{ok}`; `find_similar(card_id|text, board_id, k, min_score)->[{card_id, score, title}]`; `find_similar_problems(text, board_id, k)->[{problem_id, score}]`. Embeddings: `fastembed` with `BAAI/bge-small-en-v1.5` (ONNX, local). `MOCK_AI=1` uses a deterministic hash vector.
-- **scoring_server**: `get_rubric(board_id)->Rubric`; `compute_score(rubric_id, criterion_scores{key:int})->{total, per_criterion, normalized}` (weights and clamping here; the LLM never does math); `compare_to_peers(board_id, total)->{percentile}`.
-- **comms_server**: `list_templates()->Template[]`; `render_template(name, vars)->{text}`; `get_stakeholders(card_id)->[{name, role}]`; `save_draft(card_id, run_id, audience, text)->{id}`.
+## 3. MCP servers (official Python SDK / FastMCP, stdio; `ai/mcp_servers/<name>_mcp/server.py`)
+All inputs and outputs are typed (Pydantic), every tool and parameter has a description, all tools are deterministic with no LLM calls. **Tools that would change card state only create suggestions** (pending drafts, or links/problem attachments with status `suggested`); no tool applies a suggestion, that is a human action in the API. Servers import `core`, never the FastAPI app.
+- **cards_mcp**: reads `get_card`, `list_cards(board_id, filters)`, `get_card_context`, `list_problems`; proposals `update_card_fields`, `add_comment`, `add_tag`, `link_cards(type, confidence, rationale, status="suggested")`, `attach_problem`, `save_suggestion(kind, payload)`.
+- **similarity_mcp**: `index_card`, `index_board`, `find_similar_cards(card_id, top_k, min_score)`. Local `fastembed` embeddings (`BAAI/bge-small-en-v1.5`) stored as float32 blobs in `card_embedding`, cosine similarity in numpy; `MOCK_AI=1` uses a deterministic hashed bag-of-words embedder.
+- **scoring_mcp**: `get_rubric` (from `config/rubric.yaml`: criteria, weights, scale, descriptions), `save_scores(card_id, scores[])` (stores a `Score` row and returns the priority; does not change the card), `compute_priority(card_id | ratings)`.
+- **comms_mcp**: `save_draft`, `list_drafts`, `get_templates` (from `config/comms_templates.yaml`). Nothing is sent.
+- **Client**: `ai/mcp_servers/client.py` (`MCPToolkit`) starts all four servers, keeps one persistent stdio session per server, and returns LangChain tools via `langchain-mcp-adapters`; `toolkit.call(name, **args)` returns the structured result. `make mcp-tools` lists every tool.
+
+Differences from the first design: `compute_score`/`compare_to_peers` became `compute_priority`; `find_similar` became `find_similar_cards`; `embed_card` became `index_card` (+ `index_board`); `render_template` and `get_stakeholders` were dropped; `get_card_context` and `list_problems` were kept; `create_card` was dropped (cards are created through the API).
 
 ## 4. Prompt registry (ai/prompts, ai/llm)
 - Files `ai/prompts/<name>/vN.md`: YAML frontmatter `{name, version, model_alias, temperature, input_variables[], output_schema: "module:Class", released}` + Jinja2 body. User-provided variables are always rendered inside `<user_content>...</user_content>` by the loader helper `wrap_untrusted`.

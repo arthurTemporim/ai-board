@@ -22,14 +22,13 @@ class CardLink(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     card_id: Mapped[int] = mapped_column(ForeignKey("card.id", ondelete="CASCADE"), index=True)
-    other_card_id: Mapped[int] = mapped_column(
-        ForeignKey("card.id", ondelete="CASCADE"), index=True
-    )
+    other_card_id: Mapped[int] = mapped_column(ForeignKey("card.id", ondelete="CASCADE"), index=True)
     kind: Mapped[LinkKind] = mapped_column(enum_column(LinkKind))
     status: Mapped[LinkStatus] = mapped_column(enum_column(LinkStatus), default=LinkStatus.suggested)
-    created_by_id: Mapped[int | None] = mapped_column(
-        ForeignKey("user.id", ondelete="SET NULL"), default=None
-    )
+    # Set when an AI step proposed the link; null for links made by people.
+    confidence: Mapped[float | None] = mapped_column(default=None)
+    rationale: Mapped[str | None] = mapped_column(Text, default=None)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("user.id", ondelete="SET NULL"), default=None)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
@@ -49,10 +48,10 @@ class CardProblem(Base):
     __tablename__ = "card_problem"
 
     card_id: Mapped[int] = mapped_column(ForeignKey("card.id", ondelete="CASCADE"), primary_key=True)
-    problem_id: Mapped[int] = mapped_column(
-        ForeignKey("problem.id", ondelete="CASCADE"), primary_key=True
-    )
+    problem_id: Mapped[int] = mapped_column(ForeignKey("problem.id", ondelete="CASCADE"), primary_key=True)
     status: Mapped[LinkStatus] = mapped_column(enum_column(LinkStatus), default=LinkStatus.suggested)
+    confidence: Mapped[float | None] = mapped_column(default=None)
+    rationale: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 

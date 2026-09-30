@@ -22,6 +22,7 @@ class LinkStatus(StrEnum):
 
 class DraftKind(StrEnum):
     tag = "tag"
+    comment = "comment"
     link = "link"
     problem = "problem"
     score = "score"

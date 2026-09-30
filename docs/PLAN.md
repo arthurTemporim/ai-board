@@ -39,3 +39,6 @@ See `DECISIONS.md` for the reasoning. In short: drag and drop saves optimistical
 
 ## Phase 3 implementation notes (prompt management and LLM layer, done)
 See `DECISIONS.md` ("LLM layer"). New: `ai/llm` (registry, schemas, factory, mock, runner), seven v1 prompts in `ai/prompts`, migration `0002`. The graph, MCP servers and API endpoints that use them are still to come.
+
+## Phase 4 implementation notes (MCP servers, done)
+See `DECISIONS.md` ("MCP servers") and `ARCHITECTURE.md` section 3. Four servers with 19 tools in `ai/mcp_servers`, the LangChain client, `make mcp-tools`, migration `0003`, `config/rubric.yaml` and `config/comms_templates.yaml`. The graph that calls these tools, and the API endpoints for accepting suggestions, are still to come.

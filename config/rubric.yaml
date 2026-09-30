@@ -1,0 +1,41 @@
+# Scoring rubric used by scoring_mcp. Every criterion is rated on the scale below where a
+# higher rating always means "more reason to do this now" (so "effort" is written as effort_fit:
+# 5 = small effort). Priority is the weighted average of the ratings, scaled to 0-100.
+name: default
+version: 1
+scale:
+  min: 1
+  max: 5
+criteria:
+  - key: customer_impact
+    label: Customer impact
+    weight: 3
+    description: How much the problem hurts the customers who have it.
+    anchors:
+      1: Minor annoyance, easy workaround.
+      3: Regular friction for a real workflow.
+      5: Blocks adoption or renewal.
+  - key: demand_breadth
+    label: Demand breadth
+    weight: 2
+    description: How many customers or segments are affected, using votes and feedback as evidence.
+    anchors:
+      1: A single requester.
+      3: Several customers in one segment.
+      5: Many customers across segments.
+  - key: strategic_fit
+    label: Strategic fit
+    weight: 2
+    description: How well the request supports the product strategy and target customers.
+    anchors:
+      1: Off strategy.
+      3: Adjacent to the strategy.
+      5: Core to the strategy.
+  - key: effort_fit
+    label: Effort (inverted)
+    weight: 1
+    description: How cheap it is to deliver; a higher rating means less effort.
+    anchors:
+      1: Months of work across teams.
+      3: A few weeks for one team.
+      5: A few days.

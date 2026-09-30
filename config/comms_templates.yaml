@@ -1,0 +1,61 @@
+# Starting points for stakeholder messages, returned by comms_mcp.get_templates.
+# Placeholders use {name} syntax; callers fill them in (or use them as guidance for a draft).
+templates:
+  - name: request_received
+    audience: requester
+    description: Acknowledge a new request.
+    subject: "We received your request: {title}"
+    body: |
+      Hello {requester_name},
+
+      Thank you for suggesting "{title}". We have logged it and our product team will review it.
+      We will get back to you when we have a decision.
+  - name: under_review
+    audience: requester
+    description: Tell the requester the request is being considered.
+    subject: "Your request is under review: {title}"
+    body: |
+      Hello {requester_name},
+
+      "{title}" is under review. We are comparing it with other work and will share a decision soon.
+  - name: planned
+    audience: requester
+    description: Tell the requester the request is planned.
+    subject: "Planned: {title}"
+    body: |
+      Hello {requester_name},
+
+      Good news: "{title}" is on our plan. {timing_note}
+  - name: needs_info
+    audience: requester
+    description: Ask the requester for more detail.
+    subject: "A few questions about: {title}"
+    body: |
+      Hello {requester_name},
+
+      To evaluate "{title}" we need a little more detail:
+      {questions}
+  - name: declined
+    audience: requester
+    description: Explain kindly that the request will not be done.
+    subject: "About your request: {title}"
+    body: |
+      Hello {requester_name},
+
+      Thank you for "{title}". After review we will not pursue it for now. {reason}
+      We keep it on file and will revisit it if the situation changes.
+  - name: internal_summary
+    audience: internal
+    description: Short summary for the product team.
+    subject: "Decision brief: {title}"
+    body: |
+      {title}: {recommendation}.
+      {summary}
+      Open questions: {open_questions}
+  - name: sales_heads_up
+    audience: sales
+    description: Let the account team know what to tell customers.
+    subject: "Update for customers asking about: {title}"
+    body: |
+      Status of "{title}": {status}.
+      What you can say: {talking_points}

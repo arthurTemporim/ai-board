@@ -3,6 +3,7 @@
 from core.models.ai import AIRun, Draft, Score
 from core.models.board import Board, Column
 from core.models.card import Card, CardTag, Tag
+from core.models.embedding import CardEmbedding
 from core.models.engagement import Comment, Feedback, Vote
 from core.models.enums import (
     DraftKind,
@@ -19,6 +20,7 @@ __all__ = [
     "AIRun",
     "Board",
     "Card",
+    "CardEmbedding",
     "CardLink",
     "CardProblem",
     "CardTag",

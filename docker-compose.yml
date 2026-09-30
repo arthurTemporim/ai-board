@@ -14,6 +14,9 @@ services:
       LITELLM_BASE_URL: ${LITELLM_BASE_URL:-}
       LITELLM_API_KEY: ${LITELLM_API_KEY:-}
       AI_MODEL_OVERRIDE: ${AI_MODEL_OVERRIDE:-}
+      # The container runs as your uid, which has no home directory; give tools a writable one.
+      HOME: /tmp
+      FASTEMBED_CACHE_DIR: /data/fastembed
     volumes:
       - .:/app
       - ./.data:/data
