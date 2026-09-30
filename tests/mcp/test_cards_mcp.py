@@ -108,6 +108,14 @@ async def test_list_problems_with_card_counts(db):
         assert "Board 99 not found" in await t.error("list_problems", board_id=99)
 
 
+async def test_list_tags(db):
+    async with tools_for(CARDS_MODULE, db) as t:
+        result = await t.ok("list_tags", board_id=db.ids["board"])
+        assert [(tag["name"], tag["color"]) for tag in result["tags"]] == [("security", "#DC2626"), ("ux", "#DB2777")]
+        assert (await t.ok("list_tags", board_id=db.ids["other_board"]))["tags"] == []
+        assert "Board 99 not found" in await t.error("list_tags", board_id=99)
+
+
 # ---- suggestion tools -------------------------------------------------------------------------
 async def test_update_card_fields_only_proposes(db):
     card_id = db.ids["saml"]

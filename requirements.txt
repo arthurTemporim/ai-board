@@ -11,3 +11,6 @@ langchain-mcp-adapters>=0.1
 fastembed>=0.4
 numpy>=1.26
 langchain-openai>=0.3
+langgraph>=0.4
+langgraph-checkpoint-sqlite>=2.0
+aiosqlite>=0.20

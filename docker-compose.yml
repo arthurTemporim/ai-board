@@ -22,6 +22,7 @@ services:
       # The container runs as your uid, which has no home directory; give tools a writable one.
       HOME: /tmp
       FASTEMBED_CACHE_DIR: /data/fastembed
+      GRAPH_CHECKPOINT_PATH: /data/checkpoints.db
     volumes:
       - .:/app
       - ./.data:/data

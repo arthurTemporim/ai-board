@@ -120,3 +120,26 @@ nomic is the default for speed (indexing happens as cards are created); qwen3 is
 **stdout is the protocol.** Found by running the real model: a native library printed its download log to file descriptor 1 and corrupted the JSON-RPC stream, which no mock-based test could reveal. `serve()` now points fd 1 at stderr and keeps the real stdout only for the protocol; a test writes to fd 1 directly to prove it. The same run showed the downloader needs a writable `HOME`, so compose sets `HOME=/tmp` for the api service (the container runs as your uid, which has no home).
 
 **Verification.** `tests/mcp` starts real server processes and calls every tool through the official MCP client against a temporary SQLite file; `tests/core/test_scoring.py` covers the maths directly. Two tests that download and run the real embedding model are opt-in (`RUN_FASTEMBED=1`) and were run by hand.
+
+## LangGraph workflow (`ai/graph`)
+
+See `ARCHITECTURE.md` section 2 for the design; this records the choices and what running it showed.
+
+**The brief's "low confidence routes to human_checkpoint" needed a definition.** Two cases ask a person: an *actionable* analysis the model is not sure of (`analysis_min_confidence`, default 0.4), and a *duplicate* verdict between `link_threshold` (0.6) and `merge_threshold` (0.85). A vague request does not ask: it goes straight to `needs_info`, because "not actionable" is already the answer. Duplicates below `link_threshold` are ignored, which can lose real duplicates (see below); the thresholds are the knob.
+
+**What a person's answer does.** Their decision is stored in `human_decisions` and applied through the same proposing tools: a confirmed duplicate becomes a *suggested* duplicate link plus a merge proposal flagged `human_confirmed`. The graph still never confirms a link or applies a merge; that stays a click in the app.
+
+**Runs can be paused for days, so they must survive.** State is checkpointed to SQLite after every node; resuming works from a new process (a test closes the first `Workflow`, its MCP servers and its connections, and resumes from files alone).
+
+**Short transactions, everywhere.** The graph process and the MCP server processes write to one SQLite file. Holding a write transaction open across a model call (20-30 s on a local 12B model) would lock the servers out, so AIRun writes are small committed transactions, model calls run in a thread with their own `run_prompt_logged` logging, and no session is open while waiting.
+
+**Bug found only by running it for real: thread ids.** The first version used the run's database id as the LangGraph thread id. After `make seed` wiped the database, run ids restarted at 1 while the old checkpoint for thread "1" was still in the checkpoint file, and a new run silently resumed the old run's state (the report mixed two cards). The thread id is now a random id stored on the workflow's AIRun row, and a test forces an id collision (and fails when the old scheme is put back). Other defects caught while testing: the checkpoint step row stayed `running` while the workflow waited; a run on a missing card crashed on a foreign key instead of reporting "not found".
+
+**Results of running it on the real models (seed data, `nomic` embeddings, `llama3.2:3b`).** A full pass over one card takes about 20 s. What it showed, unvarnished:
+- The Okta card's true duplicate (the SAML card) is **not found with the defaults**: it is outside the top 5 by similarity, and at top 8 the 3B judge calls it "related" at 0.45, below `link_threshold`. The other sign-on card (Azure) is found and correctly sent to a person (0.65). So duplicate recall on this board is imperfect; `GRAPH_TOP_K`, a stronger embedding model (`qwen3-embedding:8b` ranked better) or a stronger judge are the levers, and none is tuned yet.
+- `llama3.2:3b` answered `group_problem` with problem id 7 when the board had no such problem, which is the id in the prompt's example. The guard in `group_problem` rejects ids that are not on the board, records the error and attaches nothing, so this is safe but wasteful. A v3 of that prompt with an example that does not contain an id would likely fix it; not done here because it changes a released prompt.
+- Everything else in the full pass produced valid, plausible output. Quality of scores, briefs and drafts on the 3B model remains unmeasured.
+
+**Mock mode is a wiring test, not a quality test.** Under `MOCK_AI=1` the hash embedder scores differently worded duplicates at about 0.17, below the default `min_similarity` (0.2), so the seed's duplicates are not surfaced; the tests use a lower floor and near-identical text.
+
+**Not here yet.** The API endpoints that start, poll and resume runs and that apply accepted suggestions come next; `Workflow` is the object they will call.

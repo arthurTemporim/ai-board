@@ -27,6 +27,7 @@ from core.repositories.boards import ColumnRepository
 from core.repositories.cards import TagRepository
 from core.services.cards import CardService
 from core.services.suggestions import SuggestionService
+from core.services.tags import TagService
 
 mcp = new_server(
     "cards_mcp",
@@ -131,6 +132,10 @@ class ProblemAttachResult(BaseModel):
 
 class ProblemsResult(BaseModel):
     problems: list[ProblemOut]
+
+
+class TagsResult(BaseModel):
+    tags: list[TagOut]
 
 
 # ---- input models -----------------------------------------------------------------------------
@@ -276,6 +281,15 @@ def list_problems(board_id: Annotated[int, Field(ge=1, description="Board id")])
                 ProblemOut(id=p.id, title=p.title, statement=p.statement, card_count=count)
                 for p, count in SuggestionService(session).list_problems(board_id)
             ]
+        )
+
+
+@mcp.tool()
+def list_tags(board_id: Annotated[int, Field(ge=1, description="Board id")]) -> TagsResult:
+    """List the tags defined on a board (id, name, colour), ordered by name. Read-only."""
+    with session_scope() as session:
+        return TagsResult(
+            tags=[TagOut(id=t.id, name=t.name, color=t.color) for t in TagService(session).list_tags(board_id)]
         )
 
 

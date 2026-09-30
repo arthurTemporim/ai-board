@@ -30,21 +30,31 @@ Decisions: (1) everything waits for Save; (2) a raw payload is persisted to Inbo
 Layout: `core/models`, `core/repositories`, `core/services` (move/reorder, apply-suggestion, scoring math, link merge), `core/db.py`.
 
 ## 2. Graph design (ai/graph)
-**State**: `run_id, card_id, card_snapshot, steps_requested|None, intake, analysis, candidates, dup_verdicts, problem_proposal, score, tags, brief, comms, human_input, errors, completed_steps`.
+LangGraph, one node per task, async; data through MCP tools, reasoning through the prompt registry and LLM layer, results stored as suggestions. Files: `state.py` (state schema, step names, `GraphConfig`), `nodes.py` (node bodies and the shared wrapper), `build.py` (edges and routes), `context.py` (MCP + LLM + AIRun bookkeeping), `workflow.py` (`Workflow`: start, resume, report), `run.py` (CLI).
 
-**Flow**: `intake` -> `analyze` -> `find_related` -> `group_problem` -> `score` -> `brief` -> `comms`. Tag suggestion is folded into `analyze`. Nodes write suggestions through an MCP persistence tool; none mutate card fields.
+**State** (TypedDict, JSON-safe, checkpointed after every node): `card_id`, `run_id`, `steps_requested`, `results` (step -> result), `statuses`, `errors`, `human_decisions`, plus routing fields (`route`, `checkpoint_request`, `resume_to`, `merge_target`, `outcome`). `results`, `statuses`, `errors` and `human_decisions` use reducers that merge rather than replace.
 
-**Routing**
-- `router` at START: if `steps_requested` is set, jump to the first selected step; every node ends with `next_selected()`. Partial runs use the same graph with a `should_run(step)` guard, and load prior outputs from the DB when a later step needs an earlier one (e.g. `score` without `analyze` reads the last accepted analysis).
-- `intake` vague -> `human_checkpoint(clarify)` -> back to `intake`.
-- `find_related` with `dup_confidence >= 0.9` -> `human_checkpoint(confirm_duplicate)`; if confirmed, skip to `brief`.
-- Optional `human_checkpoint(approve_brief)` before `comms` via a run flag.
-- **Interrupts**: `interrupt({kind, payload})`; resume with `Command(resume=value)`; `SqliteSaver`, `thread_id = run_id`.
-- **Failures**: recorded in `ai_call.error` and `state.errors`; steps depending on missing output are skipped; run `succeeded` with warnings, or `failed` if `intake` fails.
+**Steps** (what a caller can request, in order): `validate_intake`, `analyze_need`, `find_related`, `group_problem`, `score`, `suggest_tags`, `decision_brief`, `draft_comms`. **Routes** (taken because of what a step found, not requestable): `human_checkpoint`, `needs_info`, `merge_proposal`; every path ends in `finalize`.
+
+    validate_intake -> analyze_need -> find_related -> group_problem -> score -> suggest_tags
+                    -> decision_brief -> draft_comms -> finalize
+    analyze_need:  not actionable -> needs_info;  actionable but unsure -> human_checkpoint
+    find_related:  confident duplicate -> merge_proposal;  unsure duplicate -> human_checkpoint
+    human_checkpoint -> needs_info | merge_proposal | (find_related | group_problem)
+
+**Partial runs.** A step runs only if it is in `steps_requested` (None = all). Otherwise it is recorded as skipped. `decision_brief` needs the analysis and the score, `draft_comms` needs the brief: each comes from this run, else from the card's latest earlier successful run (read from AIRun), else the step is skipped with the reason. A dependency that failed in this run also skips the dependent step.
+
+**find_related.** `index_board`, then `find_similar_cards` (top `top_k`, floor `min_similarity`), then the `judge_duplicate` prompt for each candidate. By judge confidence: a duplicate at or above `merge_threshold` creates a suggested duplicate link and routes to a merge proposal; a duplicate between `link_threshold` and `merge_threshold` is "unsure" and goes to a person; a related card at or above `link_threshold` gets a suggested related link; everything else is ignored. All thresholds are `GraphConfig` fields (`GRAPH_*` environment variables, CLI flags).
+
+**Human checkpoint.** `interrupt()` with a question (`confirm_actionable` or `confirm_duplicate`); the answer is validated and an invalid one asks again with an explanation. The node's body re-runs on resume, so everything before `interrupt()` is idempotent. State lives in an SQLite checkpoint file (`GRAPH_CHECKPOINT_PATH`), so a run can be resumed from another process.
+
+**AIRun as the audit trail.** One `workflow` row per run, one `step:<name>` row per node (succeeded, failed, skipped with a reason, or awaiting_human), and one row per model call under its step. A `Draft`'s `run_id` points at the row that produced it.
+
+**Errors.** A node that raises is recorded (state, step row) and the graph continues; steps that do not depend on it still run. Only "card not found" in `validate_intake` stops a run. Outcomes: `completed`, `needs_info`, `duplicate_proposed`, `failed` (run failed: nothing succeeded, or the card does not exist).
 
 ## 3. MCP servers (official Python SDK / FastMCP, stdio; `ai/mcp_servers/<name>_mcp/server.py`)
-All inputs and outputs are typed (Pydantic), every tool and parameter has a description, all tools are deterministic with no LLM calls. **Tools that would change card state only create suggestions** (pending drafts, or links/problem attachments with status `suggested`); no tool applies a suggestion, that is a human action in the API. Servers import `core`, never the FastAPI app.
-- **cards_mcp**: reads `get_card`, `list_cards(board_id, filters)`, `get_card_context`, `list_problems`; proposals `update_card_fields`, `add_comment`, `add_tag`, `link_cards(type, confidence, rationale, status="suggested")`, `attach_problem`, `save_suggestion(kind, payload)`.
+All inputs and outputs are typed (Pydantic), every tool and parameter has a description, all tools are deterministic with no text-generation calls. **Tools that would change card state only create suggestions** (pending drafts, or links/problem attachments with status `suggested`); no tool applies a suggestion, that is a human action in the API. Servers import `core`, never the FastAPI app.
+- **cards_mcp**: reads `get_card`, `list_cards(board_id, filters)`, `get_card_context`, `list_problems`, `list_tags`; proposals `update_card_fields`, `add_comment`, `add_tag`, `link_cards(type, confidence, rationale, status="suggested")`, `attach_problem`, `save_suggestion(kind, payload)`.
 - **similarity_mcp**: `index_card`, `index_board`, `find_similar_cards(card_id, top_k, min_score)`. Embeddings from the litellm proxy's embedding model (default `nomic-embed-text-v2-moe`) or a local `fastembed` model, stored as float32 blobs in `card_embedding`, cosine similarity in numpy; `MOCK_AI=1` uses a deterministic hashed bag-of-words embedder.
 - **scoring_mcp**: `get_rubric` (from `config/rubric.yaml`: criteria, weights, scale, descriptions), `save_scores(card_id, scores[])` (stores a `Score` row and returns the priority; does not change the card), `compute_priority(card_id | ratings)`.
 - **comms_mcp**: `save_draft`, `list_drafts`, `get_templates` (from `config/comms_templates.yaml`). Nothing is sent.

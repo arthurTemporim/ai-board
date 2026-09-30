@@ -14,7 +14,7 @@ pytestmark = pytest.mark.anyio
 
 EXPECTED_TOOLS = {
     "cards": {
-        "get_card", "list_cards", "get_card_context", "list_problems", "update_card_fields",
+        "get_card", "list_cards", "get_card_context", "list_problems", "list_tags", "update_card_fields",
         "add_comment", "add_tag", "link_cards", "attach_problem", "save_suggestion",
     },
     "similarity": {"index_card", "index_board", "find_similar_cards"},
@@ -27,7 +27,7 @@ EXPECTED_TOOLS = {
 async def test_toolkit_starts_all_servers_and_returns_langchain_tools(db):
     async with MCPToolkit(env=db.env) as toolkit:
         assert {server: {t.name for t in tools} for server, tools in toolkit.tools_by_server.items()} == EXPECTED_TOOLS
-        assert len(toolkit.tools) == 19
+        assert len(toolkit.tools) == 20
         for tool in toolkit.tools:
             assert tool.description and isinstance(tool.args_schema, dict)
         with pytest.raises(KeyError, match="No tool named 'nope'"):
@@ -156,7 +156,7 @@ def test_the_list_script_prints_every_tool():
         [sys.executable, "-m", "ai.mcp_servers.list_tools"], capture_output=True, text=True, timeout=120
     )
     assert done.returncode == 0, done.stderr
-    assert "4 MCP servers, 19 tools" in done.stdout
+    assert "4 MCP servers, 20 tools" in done.stdout
     for tools in EXPECTED_TOOLS.values():
         for name in tools:
             assert f"  {name}(" in done.stdout
@@ -211,7 +211,7 @@ async def test_every_tool_is_documented_and_typed(db):
                     assert any(k in spec for k in ("type", "anyOf", "$ref", "enum", "allOf")), (
                         f"{tool.name}.{name} is untyped"
                     )
-    assert seen == 19
+    assert seen == 20
 
 
 async def test_tools_that_propose_say_so_and_cannot_be_told_to_apply(db):

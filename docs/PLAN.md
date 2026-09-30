@@ -45,3 +45,6 @@ See `DECISIONS.md` ("MCP servers") and `ARCHITECTURE.md` section 3. Four servers
 
 ## Model update (litellm models)
 The proxy serves local models, so: an OpenAI-compatible provider next to the Anthropic one, prompt v2 (all seven, `llama3.2:3b`, chosen on a labelled duplicate-judging test), a litellm embedder (`nomic-embed-text-v2-moe`) and opt-in live tests (`RUN_LITELLM=1`). See `DECISIONS.md` for the measurements and what is still unmeasured.
+
+## Phase 5 implementation notes (LangGraph workflow, done)
+`ai/graph`: state, nine nodes (eight steps plus the `human_checkpoint`, `needs_info` and `merge_proposal` routes), SQLite checkpointer, `Workflow` class and the `python -m ai.graph.run` CLI (`make graph ARGS="--card-id 1 --steps analyze,score"`). See `DECISIONS.md` ("LangGraph workflow") for the behaviour on real models, including what it does not yet get right.

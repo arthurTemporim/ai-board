@@ -3,7 +3,7 @@ COMPOSE ?= docker compose
 export HOST_UID := $(shell id -u)
 export HOST_GID := $(shell id -g)
 
-.PHONY: help setup dev dev-api dev-web build-web migrate seed freeze-prompts mcp-tools test test-api test-web lint down clean
+.PHONY: help setup dev dev-api dev-web build-web migrate seed freeze-prompts mcp-tools graph test test-api test-web lint down clean
 
 help:
 	@echo "setup    build images, create .env and .data/"
@@ -15,6 +15,7 @@ help:
 	@echo "seed     (re)create demo data: WIPES existing rows, then loads 2 boards / 30 cards"
 	@echo "freeze-prompts  record hashes of new prompt versions so they can no longer be edited"
 	@echo "mcp-tools  start every MCP server and list all their tools"
+	@echo "graph    run the triage workflow: make graph ARGS='--card-id 1 --steps analyze,score'"
 	@echo "test     run the backend (pytest) and frontend (vitest) tests; test-api / test-web for one"
 	@echo "lint     run ruff and the TypeScript typecheck"
 	@echo "down     stop containers"
@@ -50,6 +51,9 @@ freeze-prompts:
 
 mcp-tools:
 	$(COMPOSE) run --rm --no-deps api python -m ai.mcp_servers.list_tools
+
+graph: | .data
+	$(COMPOSE) run --rm --no-deps api python -m ai.graph.run $(ARGS)
 
 test: test-api test-web
 

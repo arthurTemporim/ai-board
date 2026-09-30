@@ -39,7 +39,8 @@ class Db:
     url: str
     factory: sessionmaker[Session]
     ids: dict[str, int] = field(default_factory=dict)
-    env: dict[str, str] = field(default_factory=dict)
+    # Holds LITELLM_API_KEY when it is set in the environment: never show it in a failure report.
+    env: dict[str, str] = field(default_factory=dict, repr=False)
 
     def session(self) -> Session:
         return self.factory()

@@ -23,6 +23,7 @@ class LinkStatus(StrEnum):
 class DraftKind(StrEnum):
     tag = "tag"
     comment = "comment"
+    analysis = "analysis"
     link = "link"
     problem = "problem"
     score = "score"
@@ -42,5 +43,6 @@ class RunStatus(StrEnum):
     pending = "pending"
     running = "running"
     awaiting_human = "awaiting_human"
+    skipped = "skipped"
     succeeded = "succeeded"
     failed = "failed"
