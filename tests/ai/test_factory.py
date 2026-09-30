@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from ai.llm.errors import LLMCallError
-from ai.llm.factory import AnthropicLLM, get_llm, is_transient, mock_enabled
+from ai.llm.factory import AnthropicLLM, OpenAICompatLLM, get_llm, is_transient, llm_provider, mock_enabled
 from ai.llm.mock import MockLLM
 from ai.llm.registry import default_registry
 from ai.llm.schemas import SuggestTagsOutput
@@ -22,9 +23,10 @@ class FakeChat:
     def __init__(self, script, record):
         self.script, self.record = script, record
 
-    def with_structured_output(self, schema, include_raw=False):
+    def with_structured_output(self, schema, include_raw=False, **kwargs):
         assert include_raw is True
         self.record["schema"] = schema
+        self.record["structured_kwargs"] = kwargs
         return self
 
     def invoke(self, messages):
@@ -48,7 +50,7 @@ def bad(problem="confidence: field required"):
     return {"raw": Usage(), "parsed": None, "parsing_error": ValueError(problem)}
 
 
-def build(script, **kwargs):
+def build(script, cls=None, **kwargs):
     record: dict = {"kwargs": []}
     sleeps: list[float] = []
 
@@ -56,18 +58,27 @@ def build(script, **kwargs):
         record["kwargs"].append(chat_kwargs)
         return FakeChat(script, record)
 
-    llm = AnthropicLLM(chat_factory=factory, sleep=sleeps.append, jitter=lambda: 1.0, **kwargs)
+    llm = (cls or AnthropicLLM)(chat_factory=factory, sleep=sleeps.append, jitter=lambda: 1.0, **kwargs)
     return llm, record, sleeps
 
 
 @pytest.fixture
 def prompt():
-    return default_registry().render("suggest_tags", SAMPLE_VARIABLES["suggest_tags"])
+    # Version 1 of the prompts targets Claude; the tests below exercise the providers with it.
+    return default_registry().render("suggest_tags", SAMPLE_VARIABLES["suggest_tags"], version=1)
 
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    for var in ("MOCK_AI", "AI_MODEL_OVERRIDE", "LITELLM_BASE_URL", "LITELLM_API_KEY", "ANTHROPIC_API_KEY"):
+    for var in (
+        "MOCK_AI",
+        "AI_MODEL_OVERRIDE",
+        "LITELLM_BASE_URL",
+        "LITELLM_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "LLM_PROVIDER",
+        "LLM_STRUCTURED_METHOD",
+    ):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -98,7 +109,7 @@ def test_different_prompts_use_different_models():
     llm, record, _ = build([good(), good()], api_key="k")
     llm.invoke(default_registry().render("suggest_tags", SAMPLE_VARIABLES["suggest_tags"]))
     tags_model = record["kwargs"][-1]["model"]
-    scored = default_registry().render("score_request", SAMPLE_VARIABLES["score_request"])
+    scored = default_registry().render("score_request", SAMPLE_VARIABLES["score_request"], version=1)
     assert llm.model_for(scored) == "claude-sonnet-5-5" != tags_model
 
 
@@ -240,3 +251,123 @@ def test_real_chat_anthropic_is_constructed_with_our_settings(monkeypatch, promp
     assert chat.model == "claude-haiku-4-5-20251001"
     assert chat.max_retries == 0 and chat.default_request_timeout == 30
     assert chat.anthropic_api_url == "http://proxy:4000"
+
+
+# ---- the OpenAI-compatible provider (litellm in front of local models) ------------------------
+def build_openai(script, **kwargs):
+    return build(script, cls=OpenAICompatLLM, **kwargs)
+
+
+def test_openai_provider_normalises_the_proxy_url_and_sends_key_and_method(monkeypatch, prompt):
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://192.168.1.5:4000/")
+    monkeypatch.setenv("LITELLM_API_KEY", "sk-proxy")
+    llm, record, _ = build_openai([good()])
+    result = llm.invoke(prompt)
+
+    kwargs = record["kwargs"][0]
+    assert kwargs["base_url"] == "http://192.168.1.5:4000/v1"
+    assert kwargs["api_key"] == "sk-proxy"
+    assert kwargs["model"] == prompt.model and kwargs["max_retries"] == 0
+    assert record["structured_kwargs"] == {"method": "json_schema"}  # tool calling is not used
+    assert isinstance(result.output, SuggestTagsOutput)
+
+
+@pytest.mark.parametrize("given", ["http://h:4000", "http://h:4000/", "http://h:4000/v1", "http://h:4000/v1/"])
+def test_openai_provider_accepts_the_url_with_or_without_v1(given, prompt):
+    llm, record, _ = build_openai([good()], base_url=given)
+    llm.invoke(prompt)
+    assert record["kwargs"][0]["base_url"] == "http://h:4000/v1"
+
+
+def test_openai_provider_works_without_a_key_for_open_proxies(prompt):
+    llm, record, _ = build_openai([good()], base_url="http://h:4000")
+    llm.invoke(prompt)
+    assert record["kwargs"][0]["api_key"] == "not-needed"
+
+
+@pytest.mark.parametrize("method", ["json_schema", "function_calling", "json_mode"])
+def test_structured_method_is_configurable(monkeypatch, prompt, method):
+    monkeypatch.setenv("LLM_STRUCTURED_METHOD", method)
+    llm, record, _ = build_openai([good()], base_url="http://h:4000")
+    llm.invoke(prompt)
+    assert record["structured_kwargs"] == {"method": method}
+
+
+def test_unknown_structured_method_and_missing_url_fail_fast(monkeypatch):
+    monkeypatch.setenv("LLM_STRUCTURED_METHOD", "telepathy")
+    with pytest.raises(LLMCallError, match="LLM_STRUCTURED_METHOD"):
+        OpenAICompatLLM(base_url="http://h:4000")
+    monkeypatch.delenv("LLM_STRUCTURED_METHOD")
+    with pytest.raises(LLMCallError, match="LITELLM_BASE_URL is not set"):
+        OpenAICompatLLM()
+
+
+def test_openai_provider_retries_transient_errors_like_the_other(prompt):
+    llm, _, sleeps = build_openai([Boom(503), TimeoutError("slow"), good()], base_url="http://h:4000")
+    assert llm.invoke(prompt).attempts == 3 and sleeps == [1.0, 2.0]
+
+
+def test_a_schema_failure_raised_as_an_exception_gets_one_repair_attempt(prompt):
+    """langchain-openai raises validation errors for bad JSON instead of returning them."""
+    with pytest.raises(ValidationError) as caught:
+        SuggestTagsOutput.model_validate({"tags": "not a list"})
+    llm, record, sleeps = build_openai([caught.value, good()], base_url="http://h:4000")
+    result = llm.invoke(prompt)
+    assert result.attempts == 2 and sleeps == []
+    assert record["calls"][1][-1][0] == "user" and "rejected" in record["calls"][1][-1][1]
+
+
+def test_repeated_schema_failures_mention_the_token_limit(prompt):
+    llm, _, _ = build_openai(
+        [ValueError("Invalid JSON: EOF while parsing"), ValueError("still bad")], base_url="http://h:4000"
+    )
+    with pytest.raises(LLMCallError, match="did not match the schema twice.*max_tokens"):
+        llm.invoke(prompt)
+
+
+def test_other_exceptions_are_not_mistaken_for_schema_failures(prompt):
+    llm, record, _ = build_openai([RuntimeError("boom"), good()], base_url="http://h:4000")
+    with pytest.raises(LLMCallError, match="RuntimeError"):
+        llm.invoke(prompt)
+    assert len(record["calls"]) == 1
+
+
+def test_openai_connection_errors_are_transient():
+    import httpx
+    import openai
+
+    request = httpx.Request("POST", "http://x")
+    assert is_transient(openai.APIConnectionError(request=request))
+    assert is_transient(openai.APITimeoutError(request=request))
+
+
+def test_real_chat_openai_accepts_our_settings(monkeypatch, prompt):
+    """No network: only checks the real ChatOpenAI takes the arguments we pass."""
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://proxy:4000")
+    monkeypatch.setenv("LITELLM_API_KEY", "k")
+    chat = OpenAICompatLLM(timeout=30)._chat(prompt)
+    assert chat.model_name == prompt.model
+    assert chat.openai_api_base == "http://proxy:4000/v1"
+    assert chat.max_retries == 0 and chat.request_timeout == 30
+
+
+# ---- choosing the provider --------------------------------------------------------------------
+def test_provider_follows_the_proxy_setting_unless_overridden(monkeypatch):
+    assert llm_provider() == "anthropic"
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://h:4000")
+    assert llm_provider() == "openai"
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    assert llm_provider() == "anthropic"
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    with pytest.raises(LLMCallError, match="LLM_PROVIDER"):
+        llm_provider()
+
+
+def test_get_llm_builds_the_provider_for_the_environment(monkeypatch):
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://h:4000")
+    assert isinstance(get_llm(), OpenAICompatLLM)
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("LITELLM_API_KEY", "proxy-key")  # Claude through the proxy's Anthropic-format endpoint
+    assert isinstance(get_llm(), AnthropicLLM)
+    monkeypatch.setenv("MOCK_AI", "1")
+    assert isinstance(get_llm(), MockLLM)

@@ -6,7 +6,8 @@
 
 Each server is one child process that stays up for the life of the toolkit (one persistent MCP
 session per server), so tool calls do not pay a start-up cost. Children inherit only the
-environment variables listed in PASSTHROUGH_ENV, plus anything passed in `env`.
+environment variables listed in PASSTHROUGH_ENV, plus anything passed in `env`. That list carries
+the litellm proxy settings (embeddings need them) but not provider keys such as ANTHROPIC_API_KEY.
 """
 
 from __future__ import annotations
@@ -36,7 +37,11 @@ PASSTHROUGH_ENV = (
     "MOCK_AI",
     "RUBRIC_PATH",
     "COMMS_TEMPLATES_PATH",
+    "EMBEDDING_PROVIDER",
     "EMBEDDING_MODEL",
+    "EMBEDDING_TIMEOUT_SECONDS",
+    "LITELLM_BASE_URL",  # similarity_mcp reaches the proxy's embedding models
+    "LITELLM_API_KEY",
     "FASTEMBED_CACHE_DIR",
     "HF_HOME",
     "TMPDIR",

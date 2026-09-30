@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import json
 import os
 
+import httpx
 import numpy as np
 import pytest
 from sqlalchemy import select
 
 from ai.mcp_servers.similarity_mcp import embedder as embedder_module
-from ai.mcp_servers.similarity_mcp.embedder import FastEmbedder, HashEmbedder, get_embedder
+from ai.mcp_servers.similarity_mcp.embedder import (
+    EmbeddingError,
+    FastEmbedder,
+    HashEmbedder,
+    LiteLLMEmbedder,
+    embedding_provider,
+    get_embedder,
+)
 from core.models import Card, CardEmbedding
 from core.services.cards import CardService
 from tests.mcp.conftest import SIMILARITY_MODULE, tools_for
@@ -35,16 +44,138 @@ def test_hash_embedder_scores_shared_words_higher_and_handles_empty_text():
     assert float(empty @ saml) == 0.0
 
 
-def test_mock_ai_selects_the_hash_embedder_and_real_selects_fastembed(monkeypatch):
+@pytest.fixture
+def clean_embedding_env(monkeypatch):
+    for var in ("MOCK_AI", "LITELLM_BASE_URL", "LITELLM_API_KEY", "EMBEDDING_PROVIDER", "EMBEDDING_MODEL"):
+        monkeypatch.delenv(var, raising=False)
     get_embedder.cache_clear()
-    monkeypatch.setenv("MOCK_AI", "1")
+    yield monkeypatch
+    get_embedder.cache_clear()
+
+
+def test_mock_ai_selects_the_hash_embedder(clean_embedding_env):
+    clean_embedding_env.setenv("MOCK_AI", "1")
+    clean_embedding_env.setenv("LITELLM_BASE_URL", "http://h:4000")  # mock wins over everything
     assert isinstance(get_embedder(), HashEmbedder)
-    get_embedder.cache_clear()
-    monkeypatch.setenv("MOCK_AI", "0")
-    monkeypatch.setenv("EMBEDDING_MODEL", "some/model")
+
+
+def test_without_a_proxy_the_local_fastembed_model_is_used(clean_embedding_env):
+    clean_embedding_env.setenv("EMBEDDING_MODEL", "some/model")
     chosen = get_embedder()
     assert isinstance(chosen, FastEmbedder) and chosen.name == "some/model"
+    assert embedding_provider() == "fastembed"
+
+
+def test_with_a_proxy_the_litellm_embedder_is_the_default(clean_embedding_env):
+    clean_embedding_env.setenv("LITELLM_BASE_URL", "http://h:4000")
+    chosen = get_embedder()
+    assert isinstance(chosen, LiteLLMEmbedder) and chosen.name == "nomic-embed-text-v2-moe:latest"
     get_embedder.cache_clear()
+    clean_embedding_env.setenv("EMBEDDING_MODEL", "qwen3-embedding:8b")
+    assert get_embedder().name == "qwen3-embedding:8b"
+
+
+def test_the_provider_can_be_forced_and_bad_values_are_rejected(clean_embedding_env):
+    clean_embedding_env.setenv("LITELLM_BASE_URL", "http://h:4000")
+    clean_embedding_env.setenv("EMBEDDING_PROVIDER", "fastembed")
+    assert isinstance(get_embedder(), FastEmbedder)
+    clean_embedding_env.setenv("EMBEDDING_PROVIDER", "word2vec")
+    with pytest.raises(EmbeddingError, match="EMBEDDING_PROVIDER"):
+        embedding_provider()
+
+
+# ---- LiteLLMEmbedder against a fake proxy -----------------------------------------------------
+def fake_proxy(handler):
+    return httpx.MockTransport(handler)
+
+
+def ok_response(request: httpx.Request, dim: int = 4) -> httpx.Response:
+    body = json.loads(request.content)
+    data = [{"index": i, "embedding": [float(i + 1)] + [0.5] * (dim - 1)} for i, _ in enumerate(body["input"])]
+    return httpx.Response(200, json={"data": list(reversed(data))})  # out of order on purpose
+
+
+def test_litellm_embedder_request_shape_and_output():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return ok_response(request)
+
+    e = LiteLLMEmbedder(
+        "nomic-embed-text-v2-moe:latest", base_url="http://proxy:4000/", api_key="sk-x", transport=fake_proxy(handler)
+    )
+    vectors = e.embed(["first", "second"])
+
+    (request,) = seen
+    assert str(request.url) == "http://proxy:4000/v1/embeddings" and request.method == "POST"
+    assert request.headers["authorization"] == "Bearer sk-x"
+    # Only model and input: an encoding_format parameter makes litellm reject Ollama-backed models.
+    assert json.loads(request.content) == {"model": "nomic-embed-text-v2-moe:latest", "input": ["first", "second"]}
+    assert vectors.dtype == np.float32 and vectors.shape == (2, 4)
+    assert np.allclose(np.linalg.norm(vectors, axis=1), 1.0, atol=1e-5)
+    assert vectors[0][0] < vectors[1][0]  # restored to request order despite the shuffled response
+    assert e.dim == 4
+
+
+def test_litellm_embedder_batches_and_replaces_empty_text():
+    batches = []
+
+    def handler(request):
+        batches.append(json.loads(request.content)["input"])
+        return ok_response(request)
+
+    e = LiteLLMEmbedder("m", base_url="http://p:4000/v1", batch_size=2, transport=fake_proxy(handler))
+    assert e.embed(["a", "", "c", "d", "e"]).shape == (5, 4)
+    assert batches == [["a", " "], ["c", "d"], ["e"]]
+
+
+def test_litellm_embedder_retries_server_errors_then_succeeds():
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(503, text="busy") if calls["n"] < 3 else ok_response(request)
+
+    sleeps = []
+    e = LiteLLMEmbedder("m", base_url="http://p:4000", transport=fake_proxy(handler), sleep=sleeps.append)
+    assert e.embed(["x"]).shape == (1, 4) and calls["n"] == 3 and len(sleeps) == 2
+
+
+def test_litellm_embedder_does_not_retry_client_errors():
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(400, text="litellm.UnsupportedParamsError: nope")
+
+    e = LiteLLMEmbedder("m", base_url="http://p:4000", transport=fake_proxy(handler), sleep=lambda s: None)
+    with pytest.raises(EmbeddingError, match="Embedding model 'm' failed: HTTP 400.*UnsupportedParamsError"):
+        e.embed(["x"])
+    assert calls["n"] == 1
+
+
+def test_litellm_embedder_gives_up_after_the_attempt_limit_and_on_network_errors():
+    def down(request):
+        raise httpx.ConnectError("refused")
+
+    e = LiteLLMEmbedder("m", base_url="http://p:4000", transport=fake_proxy(down), sleep=lambda s: None, max_attempts=2)
+    with pytest.raises(EmbeddingError, match="failed after 2 attempts.*ConnectError"):
+        e.embed(["x"])
+
+
+@pytest.mark.parametrize("payload", [{"oops": 1}, {"data": [{"index": 0}]}, {"data": []}])
+def test_litellm_embedder_rejects_malformed_responses(payload):
+    e = LiteLLMEmbedder(
+        "m", base_url="http://p:4000", transport=fake_proxy(lambda r: httpx.Response(200, json=payload))
+    )
+    with pytest.raises(EmbeddingError):
+        e.embed(["x"])
+
+
+def test_litellm_embedder_needs_a_proxy_address(clean_embedding_env):
+    with pytest.raises(EmbeddingError, match="LITELLM_BASE_URL is not set"):
+        LiteLLMEmbedder("m")
 
 
 def test_fast_embedder_does_not_load_a_model_until_used(tmp_path):
@@ -198,7 +329,13 @@ async def test_the_server_with_the_real_model_ranks_the_paraphrase_first(db, tmp
             description="Nobody wants another password.",
         )
         s.commit()
-    db.env.update({"MOCK_AI": "0", "FASTEMBED_CACHE_DIR": os.environ.get("FASTEMBED_CACHE_DIR", str(tmp_path / "fe"))})
+    db.env.update(
+        {
+            "MOCK_AI": "0",
+            "EMBEDDING_PROVIDER": "fastembed",
+            "FASTEMBED_CACHE_DIR": os.environ.get("FASTEMBED_CACHE_DIR", str(tmp_path / "fe")),
+        }
+    )
     async with tools_for(SIMILARITY_MODULE, db) as t:
         indexed = await t.ok("index_board", board_id=db.ids["board"])
         found = await t.ok("find_similar_cards", card_id=db.ids["saml"], top_k=3)
@@ -208,3 +345,20 @@ async def test_the_server_with_the_real_model_ranks_the_paraphrase_first(db, tmp
     with db.session() as s:
         row = s.get(CardEmbedding, db.ids["saml"])
         assert (row.dim, len(row.vector)) == (384, 384 * 4)
+
+
+@pytest.mark.skipif(
+    not (os.environ.get("RUN_LITELLM") and os.environ.get("LITELLM_BASE_URL")),
+    reason="calls your litellm proxy; set RUN_LITELLM=1 (and LITELLM_BASE_URL) to run",
+)
+async def test_the_server_with_the_proxys_embedding_model_ranks_the_paraphrase_first(db):
+    model = os.environ.get("EMBEDDING_MODEL") or "nomic-embed-text-v2-moe:latest"
+    db.env.update({"MOCK_AI": "0", "EMBEDDING_PROVIDER": "litellm", "EMBEDDING_MODEL": model})
+    async with tools_for(SIMILARITY_MODULE, db) as t:
+        indexed = await t.ok("index_board", board_id=db.ids["board"])
+        found = await t.ok("find_similar_cards", card_id=db.ids["saml"], top_k=3)
+    assert indexed["model"] == found["model"] == model
+    assert found["results"][0]["card_id"] == db.ids["okta"]
+    with db.session() as s:
+        row = s.get(CardEmbedding, db.ids["saml"])
+        assert row.model == model and len(row.vector) == row.dim * 4 and row.dim > 100

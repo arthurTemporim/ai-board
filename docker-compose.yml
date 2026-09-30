@@ -14,6 +14,11 @@ services:
       LITELLM_BASE_URL: ${LITELLM_BASE_URL:-}
       LITELLM_API_KEY: ${LITELLM_API_KEY:-}
       AI_MODEL_OVERRIDE: ${AI_MODEL_OVERRIDE:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      LLM_STRUCTURED_METHOD: ${LLM_STRUCTURED_METHOD:-}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
       # The container runs as your uid, which has no home directory; give tools a writable one.
       HOME: /tmp
       FASTEMBED_CACHE_DIR: /data/fastembed

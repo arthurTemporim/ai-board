@@ -1,12 +1,20 @@
-"""LLM factory: Claude through langchain-anthropic with structured output, or the mock.
+"""LLM factory: structured-output chat models, or the mock.
+
+Providers (LLM_PROVIDER)
+    openai      any OpenAI-compatible endpoint via langchain-openai. This is what a litellm proxy
+                in front of local models exposes. Default whenever LITELLM_BASE_URL is set.
+    anthropic   Claude via langchain-anthropic (direct, or a proxy's Anthropic-format endpoint).
 
 Configuration (environment)
     MOCK_AI=1              use MockLLM: no network, no API key, deterministic output
-    ANTHROPIC_API_KEY      key for talking to Anthropic directly
-    LITELLM_BASE_URL       if set, send requests to this litellm proxy (its Anthropic-format
-    LITELLM_API_KEY        endpoint) using this key instead; model names are then litellm aliases
-    AI_MODEL_OVERRIDE      force every prompt onto this model name (handy for litellm aliases)
-    LLM_TIMEOUT_SECONDS    per-request timeout, default 60
+    LITELLM_BASE_URL       proxy address, with or without a trailing /v1
+    LITELLM_API_KEY        key for the proxy
+    ANTHROPIC_API_KEY      key for talking to Anthropic directly (provider "anthropic")
+    LLM_STRUCTURED_METHOD  how the openai provider asks for structured output: json_schema
+                           (default), function_calling or json_mode. Local models served through
+                           Ollama accept only json_schema and json_mode, not tool calls.
+    AI_MODEL_OVERRIDE      force every prompt onto this model name
+    LLM_TIMEOUT_SECONDS    per-request timeout, default 60 (local models can be slow: raise it)
     LLM_MAX_ATTEMPTS       tries per call for transient failures, default 3
 
 The model for each prompt comes from its frontmatter; nothing here hard-codes one.
@@ -56,24 +64,30 @@ def is_transient(exc: BaseException) -> bool:
         return status in (408, 409, 429) or status >= 500
     if isinstance(exc, TimeoutError | ConnectionError):
         return True
-    try:
-        import anthropic
-
-        return isinstance(exc, anthropic.APIConnectionError)  # includes APITimeoutError
-    except ImportError:  # pragma: no cover
-        return False
+    for module_name in ("anthropic", "openai"):
+        try:
+            module = __import__(module_name)
+        except ImportError:  # pragma: no cover
+            continue
+        if isinstance(exc, module.APIConnectionError):  # includes APITimeoutError
+            return True
+    return False
 
 
 ChatFactory = Callable[..., Any]
 
-
-def _default_chat_factory(**kwargs: Any) -> Any:
-    from langchain_anthropic import ChatAnthropic
-
-    return ChatAnthropic(**kwargs)
+STRUCTURED_METHODS = ("json_schema", "function_calling", "json_mode")
 
 
-class AnthropicLLM:
+class ChatModelLLM:
+    """Retry, backoff and schema-repair logic shared by the providers.
+
+    Subclasses decide where to connect (_resolve_endpoint), how to build the chat model
+    (_default_factory, _chat_kwargs) and how to ask it for structured output (_structured).
+    """
+
+    provider = "base"
+
     def __init__(
         self,
         *,
@@ -87,13 +101,7 @@ class AnthropicLLM:
         sleep: Callable[[float], None] = time.sleep,
         jitter: Callable[[], float] = random.random,
     ):
-        self.base_url = base_url if base_url is not None else (os.environ.get("LITELLM_BASE_URL") or None)
-        if api_key is not None:
-            self.api_key = api_key
-        elif self.base_url:
-            self.api_key = os.environ.get("LITELLM_API_KEY") or None
-        else:
-            self.api_key = os.environ.get("ANTHROPIC_API_KEY") or None
+        self.base_url, self.api_key = self._resolve_endpoint(base_url, api_key, offline=chat_factory is not None)
         self.timeout = timeout if timeout is not None else float(os.environ.get("LLM_TIMEOUT_SECONDS", "60"))
         self.max_attempts = max_attempts if max_attempts is not None else int(os.environ.get("LLM_MAX_ATTEMPTS", "3"))
         self.base_delay = base_delay
@@ -101,12 +109,20 @@ class AnthropicLLM:
         self._sleep = sleep
         self._jitter = jitter
         self._chat_factory = chat_factory
-        if chat_factory is None and not self.api_key:
-            raise LLMCallError(
-                "No API key configured. Set ANTHROPIC_API_KEY (or LITELLM_BASE_URL and LITELLM_API_KEY), "
-                "or set MOCK_AI=1 to run without a model."
-            )
 
+    # -- provider hooks --
+    def _resolve_endpoint(
+        self, base_url: str | None, api_key: str | None, offline: bool
+    ) -> tuple[str | None, str | None]:
+        raise NotImplementedError
+
+    def _default_factory(self) -> ChatFactory:
+        raise NotImplementedError
+
+    def _structured(self, chat: Any, schema: type[BaseModel]) -> Any:
+        return chat.with_structured_output(schema, include_raw=True)
+
+    # -- shared behaviour --
     def model_for(self, prompt: RenderedPrompt) -> str:
         return os.environ.get("AI_MODEL_OVERRIDE") or prompt.model
 
@@ -122,14 +138,14 @@ class AnthropicLLM:
             kwargs["base_url"] = self.base_url
         if self.api_key:
             kwargs["api_key"] = self.api_key
-        return (self._chat_factory or _default_chat_factory)(**kwargs)
+        return (self._chat_factory or self._default_factory())(**kwargs)
 
     def _delay(self, attempt: int) -> float:
         ceiling = min(self.max_delay, self.base_delay * 2 ** (attempt - 1))
         return ceiling * (0.5 + 0.5 * self._jitter())
 
     def invoke(self, prompt: RenderedPrompt) -> LLMResult:
-        structured = self._chat(prompt).with_structured_output(prompt.output_schema, include_raw=True)
+        structured = self._structured(self._chat(prompt), prompt.output_schema)
         messages: list[tuple[str, str]] = [(m.role, m.content) for m in prompt.messages]
         tokens_in = tokens_out = 0
         transient_failures = 0
@@ -138,27 +154,40 @@ class AnthropicLLM:
 
         while True:
             calls += 1
+            reply: dict[str, Any] = {}
             try:
                 reply = structured.invoke(messages)
+                problem: Any = reply.get("parsing_error")
             except Exception as exc:
-                transient_failures += 1
-                if is_transient(exc) and transient_failures < self.max_attempts:
-                    self._sleep(self._delay(transient_failures))
-                    continue
-                raise LLMCallError(
+                failure = LLMCallError(
                     f"{prompt.ref}: model call failed after {calls} attempt(s): {type(exc).__name__}: {exc}"
-                ) from exc
+                )
+                if is_transient(exc):
+                    transient_failures += 1
+                    if transient_failures < self.max_attempts:
+                        self._sleep(self._delay(transient_failures))
+                        continue
+                    raise failure from exc
+                if not isinstance(exc, ValueError):
+                    raise failure from exc
+                # Invalid JSON, schema validation or an output-parser error. Some providers raise
+                # these instead of returning them; they are the model's fault, not the network's.
+                problem = exc
 
             usage = getattr(reply.get("raw"), "usage_metadata", None) or {}
             tokens_in += int(usage.get("input_tokens", 0))
             tokens_out += int(usage.get("output_tokens", 0))
 
-            parsed, problem = reply.get("parsed"), reply.get("parsing_error")
+            parsed = reply.get("parsed")
             if isinstance(parsed, prompt.output_schema) and problem is None:
                 return LLMResult(parsed, tokens_in or None, tokens_out or None, calls)
 
             if repaired:
-                raise LLMCallError(f"{prompt.ref}: model output did not match the schema twice: {problem}")
+                raise LLMCallError(
+                    f"{prompt.ref}: model output did not match the schema twice: {problem}. "
+                    "If this repeats, the model may be running out of output tokens (raise max_tokens in the "
+                    "prompt's frontmatter) or not following the schema."
+                )
             repaired = True
             messages = [
                 *messages,
@@ -170,10 +199,82 @@ class AnthropicLLM:
             ]
 
 
+class AnthropicLLM(ChatModelLLM):
+    """Claude through langchain-anthropic; structured output uses tool calling."""
+
+    provider = "anthropic"
+
+    def _resolve_endpoint(self, base_url, api_key, offline):
+        url = base_url if base_url is not None else (os.environ.get("LITELLM_BASE_URL") or None)
+        if api_key is not None:
+            key = api_key
+        elif url:
+            key = os.environ.get("LITELLM_API_KEY") or None
+        else:
+            key = os.environ.get("ANTHROPIC_API_KEY") or None
+        if not offline and not key:
+            raise LLMCallError(
+                "No API key configured. Set ANTHROPIC_API_KEY (or LITELLM_BASE_URL and LITELLM_API_KEY), "
+                "or set MOCK_AI=1 to run without a model."
+            )
+        return url, key
+
+    def _default_factory(self) -> ChatFactory:
+        from langchain_anthropic import ChatAnthropic
+
+        return ChatAnthropic
+
+
+class OpenAICompatLLM(ChatModelLLM):
+    """Any OpenAI-compatible endpoint (a litellm proxy in front of local models) via langchain-openai."""
+
+    provider = "openai"
+
+    def __init__(self, *, structured_method: str | None = None, **kwargs: Any):
+        self.structured_method = structured_method or os.environ.get("LLM_STRUCTURED_METHOD") or "json_schema"
+        if self.structured_method not in STRUCTURED_METHODS:
+            raise LLMCallError(
+                f"LLM_STRUCTURED_METHOD must be one of {', '.join(STRUCTURED_METHODS)}, got '{self.structured_method}'"
+            )
+        super().__init__(**kwargs)
+
+    def _resolve_endpoint(self, base_url, api_key, offline):
+        url = (base_url if base_url is not None else os.environ.get("LITELLM_BASE_URL")) or None
+        if url is None and not offline:
+            raise LLMCallError(
+                "LITELLM_BASE_URL is not set. Point it at your litellm proxy (for example http://host:4000), "
+                "or set MOCK_AI=1 to run without a model."
+            )
+        if url is not None:
+            url = url.rstrip("/")
+            if not url.endswith("/v1"):
+                url += "/v1"
+        key = api_key if api_key is not None else (os.environ.get("LITELLM_API_KEY") or None)
+        return url, key or "not-needed"  # some proxies need no key, but the client wants a value
+
+    def _default_factory(self) -> ChatFactory:
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI
+
+    def _structured(self, chat: Any, schema: type[BaseModel]) -> Any:
+        return chat.with_structured_output(schema, include_raw=True, method=self.structured_method)
+
+
+def llm_provider() -> str:
+    """LLM_PROVIDER if set; otherwise openai when a litellm proxy is configured, else anthropic."""
+    chosen = (os.environ.get("LLM_PROVIDER") or "").strip().lower()
+    if chosen:
+        if chosen not in ("openai", "anthropic"):
+            raise LLMCallError(f"LLM_PROVIDER must be 'openai' or 'anthropic', got '{chosen}'")
+        return chosen
+    return "openai" if os.environ.get("LITELLM_BASE_URL") else "anthropic"
+
+
 def get_llm() -> StructuredLLM:
-    """MockLLM when MOCK_AI is set, otherwise Claude."""
+    """MockLLM when MOCK_AI is set, otherwise the configured provider."""
     if mock_enabled():
         from ai.llm.mock import MockLLM
 
         return MockLLM()
-    return AnthropicLLM()
+    return OpenAICompatLLM() if llm_provider() == "openai" else AnthropicLLM()

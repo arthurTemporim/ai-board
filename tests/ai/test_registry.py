@@ -61,9 +61,10 @@ def test_every_prompt_is_registered_loadable_and_released():
     assert registry.names() == PROMPT_NAMES
     for name in PROMPT_NAMES:
         spec = registry.load(name)
-        assert (spec.name, spec.version) == (name, 1)
-        assert spec.ref == f"{name}@1"
-        assert spec.model.startswith("claude-")
+        assert registry.active_version(name) == 2
+        assert (spec.name, spec.version) == (name, 2)
+        assert spec.ref == f"{name}@2"
+        assert spec.model == "llama3.2:3b"
         assert 0.0 <= spec.temperature <= 1.0
         assert (
             spec.sha256
@@ -73,7 +74,7 @@ def test_every_prompt_is_registered_loadable_and_released():
 
 def test_module_level_render_uses_the_active_version():
     rendered = render("score_request", SAMPLE_VARIABLES["score_request"])
-    assert rendered.ref == "score_request@1"
+    assert rendered.ref == "score_request@2"
     assert [m.role for m in rendered.messages] == ["system", "user"]
 
 

@@ -154,9 +154,8 @@ def test_mock_pipeline_keeps_its_structure_and_ignores_the_instruction(session_f
         # ...and the stored runs show the same prompts ran, with the hostile text kept as plain input data.
         runs = session.scalars(select(AIRun).order_by(AIRun.id)).all()
         assert [(r.prompt_name, r.prompt_version, r.status) for r in runs] == [
-            ("analyze_need", 1, RunStatus.succeeded),
-            ("score_request", 1, RunStatus.succeeded),
-            ("decision_brief", 1, RunStatus.succeeded),
+            (name, default_registry().active_version(name), RunStatus.succeeded)
+            for name in ("analyze_need", "score_request", "decision_brief")
         ]
         assert all(injected in r.input["variables"]["card_description"] for r in runs)
 

@@ -42,3 +42,6 @@ See `DECISIONS.md` ("LLM layer"). New: `ai/llm` (registry, schemas, factory, moc
 
 ## Phase 4 implementation notes (MCP servers, done)
 See `DECISIONS.md` ("MCP servers") and `ARCHITECTURE.md` section 3. Four servers with 19 tools in `ai/mcp_servers`, the LangChain client, `make mcp-tools`, migration `0003`, `config/rubric.yaml` and `config/comms_templates.yaml`. The graph that calls these tools, and the API endpoints for accepting suggestions, are still to come.
+
+## Model update (litellm models)
+The proxy serves local models, so: an OpenAI-compatible provider next to the Anthropic one, prompt v2 (all seven, `llama3.2:3b`, chosen on a labelled duplicate-judging test), a litellm embedder (`nomic-embed-text-v2-moe`) and opt-in live tests (`RUN_LITELLM=1`). See `DECISIONS.md` for the measurements and what is still unmeasured.

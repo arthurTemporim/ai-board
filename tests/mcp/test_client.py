@@ -101,7 +101,10 @@ def test_child_processes_only_get_the_listed_environment(monkeypatch):
     env = server_env({"RUBRIC_PATH": "/tmp/r.yaml"})
     assert env["DATABASE_URL"] == "sqlite:///x.db" and env["RUBRIC_PATH"] == "/tmp/r.yaml"
     assert set(env) <= set(PASSTHROUGH_ENV) | {"RUBRIC_PATH"}
-    assert "ANTHROPIC_API_KEY" not in env and "LITELLM_API_KEY" not in env and "SOMETHING_ELSE" not in env
+    # similarity_mcp needs the proxy for embeddings, so those settings travel; provider keys and
+    # anything unlisted do not.
+    assert env["LITELLM_API_KEY"] == "sk-secret-2"
+    assert "ANTHROPIC_API_KEY" not in env and "SOMETHING_ELSE" not in env
     for name, settings in connections().items():
         assert settings["transport"] == "stdio" and settings["args"] == ["-m", SERVERS[name]]
 

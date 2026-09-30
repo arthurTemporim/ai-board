@@ -46,7 +46,7 @@ def test_successful_run_is_logged_in_ai_run(session_factory):
 
     assert result.run_id == run.id and result.output is output
     assert run.kind == "suggest_tags"
-    assert (run.prompt_name, run.prompt_version) == ("suggest_tags", 1)
+    assert (run.prompt_name, run.prompt_version) == ("suggest_tags", default_registry().active_version("suggest_tags"))
     assert run.model == "claude-test"
     assert run.input_hash == result.input_hash == expected_hash
     assert run.input == {"variables": variables}

@@ -56,7 +56,23 @@ The card shows possible duplicates, related requests and pending AI suggestions.
 
 ## LLM layer (`ai/llm`, `ai/prompts`)
 
-**Provider.** Claude through `langchain-anthropic` (`ChatAnthropic.with_structured_output`), as the Phase 3 brief says. The earlier plan said the LLM would sit behind a litellm service, so `LITELLM_BASE_URL` / `LITELLM_API_KEY` point the same client at a litellm proxy's Anthropic-format endpoint, and `AI_MODEL_OVERRIDE` maps every prompt onto a litellm alias. One code path covers both; nothing calls litellm's own SDK. If the proxy fronts local or open models, tool-calling structured output may be unreliable, which is what the single repair retry below is for. **Not yet exercised against a live model or proxy** (no key in this environment); the factory is tested with a fake chat model and construction of the real `ChatAnthropic` is tested.
+**Provider.** Two, chosen by `LLM_PROVIDER` (default: `openai` when `LITELLM_BASE_URL` is set, otherwise `anthropic`):
+- `openai` (`langchain-openai`): any OpenAI-compatible endpoint. This is the configured setup: a litellm proxy in front of local Ollama models (`gemma4:12b`, `llama3.2:3b`, `lfm2.5:8b`, `nimble:9b`).
+- `anthropic` (`langchain-anthropic`): Claude, directly or through a proxy's Anthropic-format endpoint. This is what the Phase 3 brief asked for and is kept working; prompt v1 is written for it.
+Nothing calls litellm's own SDK. `AI_MODEL_OVERRIDE` forces one model for every prompt (A/B tests).
+
+**Structured output with local models (measured against the proxy, not assumed).** Tool calling (`function_calling`) is rejected by the Ollama backend (`UnsupportedParamsError`). `json_schema` worked on all four chat models for all seven prompts; `json_mode` was inconsistent (one parse failure on `llama3.2:3b`). So the openai provider defaults to `json_schema` (`LLM_STRUCTURED_METHOD` to change). Some providers *raise* schema/JSON errors instead of returning them, so a `ValueError` from the model call is treated as a schema failure (one repair attempt), not as a network failure. `gemma4:12b` looks like a reasoning model: with `max_tokens` of 600-1200 it twice returned empty or truncated output, and with 4096 it succeeded (17-32 s). Budget generously for it.
+
+**Which model runs which prompt.** Prompt v1 names Claude models. Released prompts cannot be edited, and a model is part of a prompt file, so switching models meant **v2 of all seven prompts** (bodies identical, only `model` differs; a test enforces that) and making v2 active. v2 uses `llama3.2:3b` for everything, on the only real measurement available: `judge_duplicate` on the 10 labelled pairs in `labels.json` (7 duplicates, 3 related-but-distinct; one run each, temperature 0):
+
+| model | correct | time for 10 |
+|---|---|---|
+| `llama3.2:3b` | 8/10 | 25 s |
+| `nimble:9b` | 5/10 | 74 s |
+| `gemma4:12b` | 4/10 (+1 failed) | 185 s |
+| `lfm2.5:8b` | 2/10 | 79 s |
+
+The bigger models were worse and slower, mostly by saying "related" or "distinct" for real duplicates, so I did not assign larger models to other prompts on a hunch. Every model returned valid output for all seven prompts; only `judge_duplicate` has accuracy data. Scoring, tagging, analysis and drafting quality on `llama3.2:3b` is **unmeasured**; `llama3.2:3b` also gave noticeably different ratings from the other models on `score_request` in a single sample. The next step is a per-prompt eval with labelled data (see the plan's metrics) before trusting these on real decisions.
 
 **Prompt list.** `analyze_need`, `judge_duplicate`, `group_problem`, `score_request`, `suggest_tags`, `decision_brief`, `draft_update`, as listed in the brief. This replaces the prompt names in the original plan (`intake`, `analyze`, `dup_confirm`, `score`, `brief`, `comms`). There is no separate intake/vagueness prompt: `analyze_need` returns `is_actionable` and clarifying questions.
 
@@ -87,11 +103,19 @@ This reduces the risk; it does not remove it. The model can still be persuaded, 
 
 **Priority maths.** Priority is the weighted average of the ratings rescaled to 0-100, `100 * sum(w_i * (r_i - min) / (max - min)) / sum(w_i)`. Every criterion is "higher = more reason to do it" (effort is `effort_fit`, 5 = cheap). `save_scores` requires a rating for every criterion and rejects unknown or repeated ones. The rubric and the comms templates are YAML in `config/`, editable without code changes (`RUBRIC_PATH`, `COMMS_TEMPLATES_PATH` override them); a score stores the rubric name and version it was computed with.
 
-**Embeddings.** Stored per card as unit-length float32 blobs; search loads the board's vectors and ranks by dot product, ties broken by card id so results are deterministic. A stored vector is only refreshed by `index_card`, so it can be stale after a card's text changes; `index_card` compares a hash of the text and skips unchanged cards. `find_similar_cards` indexes the query card itself if needed and reports how many cards on the board are still unindexed. The model downloads on first use (about 130 MB) into `FASTEMBED_CACHE_DIR` (`/data/fastembed` in compose); baking it into the image, as the original plan suggested, is left for later. Adding `fastembed` grew the API image from about 400 MB to 730 MB.
+**Embeddings.** Provider by `EMBEDDING_PROVIDER` (default `litellm` when a proxy is configured, else `fastembed`; `MOCK_AI=1` always uses the hash embedder). The proxy's embedding models are called over plain HTTP (`LiteLLMEmbedder`), not the OpenAI SDK, because the SDK always sends an `encoding_format` that litellm rejects for Ollama-backed models. Measured on the seed data (30 cards, 7 duplicate pairs, real proxy):
+
+| embedder | dim | time for 30 cards | duplicate in top 3 | duplicate scores | related-pair scores |
+|---|---|---|---|---|---|
+| `nomic-embed-text-v2-moe` (default) | 768 | 4 s | 6/7 | 0.31-0.55 | 0.34-0.48 |
+| `qwen3-embedding:8b` | 4096 | 57 s | 7/7 | 0.54-0.70 | 0.47-0.57 |
+| fastembed `bge-small-en-v1.5` | 384 | local | 6/7 | 0.56-0.73 | 0.59-0.65 |
+
+nomic is the default for speed (indexing happens as cards are created); qwen3 is one setting away and finds every duplicate, but costs about 14x the time and 10x the storage. No embedder separates duplicates from related pairs by score alone (ranges overlap), so the judge prompt decides. Vectors are stored per card as unit-length float32 blobs; search loads the board's vectors and ranks by dot product, ties broken by card id so results are deterministic. A stored vector is only refreshed by `index_card`, so it can be stale after a card's text changes; `index_card` compares a hash of the text and skips unchanged cards. `find_similar_cards` indexes the query card itself if needed and reports how many cards on the board are still unindexed. The model downloads on first use (about 130 MB) into `FASTEMBED_CACHE_DIR` (`/data/fastembed` in compose); baking it into the image, as the original plan suggested, is left for later. Adding `fastembed` grew the API image from about 400 MB to 730 MB.
 
 *Measured on the seed data with `data/seed/labels.json`* (one run, 7 true duplicate pairs): the real model puts the partner in the top 3 for 6 of 7 (scores 0.56-0.73); the mock embedder manages 4 of 7 because it only matches shared words. The three related-but-distinct pairs score 0.59-0.65, inside the duplicate range, so similarity finds candidates but cannot decide duplicate vs related: that decision is the `judge_duplicate` prompt's job, and no threshold on this score should auto-link cards.
 
-**Processes and environment.** Each server is a child process of whoever starts it (for the API, inside the `api` container), which keeps SQLite to one container. The MCP SDK starts children with a minimal environment, so `client.py` passes an explicit list (database URL, `MOCK_AI`, config paths, cache dirs). API keys are deliberately not in that list: the servers make no model calls.
+**Processes and environment.** Each server is a child process of whoever starts it (for the API, inside the `api` container), which keeps SQLite to one container. The MCP SDK starts children with a minimal environment, so `client.py` passes an explicit list (database URL, `MOCK_AI`, config paths, cache dirs, and the litellm proxy address and key, which `similarity_mcp` needs for embeddings). `ANTHROPIC_API_KEY` and everything else is not passed: the servers make no text-generation calls.
 
 **stdout is the protocol.** Found by running the real model: a native library printed its download log to file descriptor 1 and corrupted the JSON-RPC stream, which no mock-based test could reveal. `serve()` now points fd 1 at stderr and keeps the real stdout only for the protocol; a test writes to fd 1 directly to prove it. The same run showed the downloader needs a writable `HOME`, so compose sets `HOME=/tmp` for the api service (the container runs as your uid, which has no home).
 

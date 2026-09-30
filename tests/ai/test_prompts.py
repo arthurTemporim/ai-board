@@ -114,9 +114,23 @@ def test_every_prompt_points_at_its_own_schema_in_llm_schemas():
         assert default_registry().load(name).output_schema is schema
 
 
-def test_cheap_classification_uses_the_small_model_and_reasoning_the_large_one():
+def test_active_prompts_target_the_local_model_and_v1_keeps_the_claude_models():
     registry = default_registry()
-    assert registry.load("suggest_tags").model == "claude-haiku-4-5-20251001"
+    for name in PROMPT_NAMES:
+        assert registry.active_version(name) == 2
+        assert registry.load(name).model == "llama3.2:3b"
+        assert registry.load(name).temperature <= 0.5
+    assert registry.load("suggest_tags", version=1).model == "claude-haiku-4-5-20251001"
     for name in ("analyze_need", "judge_duplicate", "score_request", "decision_brief"):
-        assert registry.load(name).model == "claude-sonnet-5-5"
-        assert registry.load(name).temperature <= 0.2  # judgement prompts stay near-deterministic
+        assert registry.load(name, version=1).model == "claude-sonnet-5-5"
+
+
+@pytest.mark.parametrize("name", PROMPT_NAMES)
+def test_v2_only_changes_the_model(name):
+    """v2 exists because released files cannot be edited; nothing but the model may differ from v1."""
+    registry = default_registry()
+    v1, v2 = registry.load(name, version=1), registry.load(name, version=2)
+    assert (v1.system_template, v1.user_template) == (v2.system_template, v2.user_template)
+    assert v1.variables == v2.variables and v1.output_schema is v2.output_schema
+    assert (v1.temperature, v1.max_tokens) == (v2.temperature, v2.max_tokens)
+    assert v1.model != v2.model
