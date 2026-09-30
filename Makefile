@@ -3,7 +3,7 @@ COMPOSE ?= docker compose
 export HOST_UID := $(shell id -u)
 export HOST_GID := $(shell id -g)
 
-.PHONY: help setup dev dev-api dev-web build-web migrate seed test test-api test-web lint down clean
+.PHONY: help setup dev dev-api dev-web build-web migrate seed freeze-prompts test test-api test-web lint down clean
 
 help:
 	@echo "setup    build images, create .env and .data/"
@@ -13,6 +13,7 @@ help:
 	@echo "build-web  typecheck and build the production bundle"
 	@echo "migrate  apply Alembic migrations"
 	@echo "seed     (re)create demo data: WIPES existing rows, then loads 2 boards / 30 cards"
+	@echo "freeze-prompts  record hashes of new prompt versions so they can no longer be edited"
 	@echo "test     run the backend (pytest) and frontend (vitest) tests; test-api / test-web for one"
 	@echo "lint     run ruff and the TypeScript typecheck"
 	@echo "down     stop containers"
@@ -42,6 +43,9 @@ migrate: | .data
 
 seed: | .data
 	$(COMPOSE) run --rm api sh -c "alembic upgrade head && python -m data.seed.seed --reset"
+
+freeze-prompts:
+	$(COMPOSE) run --rm --no-deps api python -m ai.llm.registry freeze
 
 test: test-api test-web
 

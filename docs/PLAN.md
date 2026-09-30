@@ -36,3 +36,6 @@ Deviations from the original design, all deliberate:
 
 ## Phase 2 implementation notes (frontend, done)
 See `DECISIONS.md` for the reasoning. In short: drag and drop saves optimistically (this replaces the "everything waits for Save" rule for board moves only; the drawer still has Save); filters are client-side and turn dragging off; no router or UI library; `docker compose` runs the Vite dev server (`make dev`).
+
+## Phase 3 implementation notes (prompt management and LLM layer, done)
+See `DECISIONS.md` ("LLM layer"). New: `ai/llm` (registry, schemas, factory, mock, runner), seven v1 prompts in `ai/prompts`, migration `0002`. The graph, MCP servers and API endpoints that use them are still to come.

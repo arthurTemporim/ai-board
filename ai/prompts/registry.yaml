@@ -1,0 +1,29 @@
+prompts:
+  analyze_need:
+    active: 1
+    released:
+      1: 42a3d6c5f74002762ef9da39946d7c24f57d7b7b2937e140aec91284c742f21c
+  decision_brief:
+    active: 1
+    released:
+      1: bd8a67d58af00b85e62cd9950483a013c3eca6aad995282be710c5606faed3b4
+  draft_update:
+    active: 1
+    released:
+      1: 3b70c22f157aad5405fdd91a1c27b2198ccee12cd630e11d1a75bef0db5fc601
+  group_problem:
+    active: 1
+    released:
+      1: 4258b2a15c702b898e13a43566cf4d4f88b1ffdce4f79062318702ff452c4b62
+  judge_duplicate:
+    active: 1
+    released:
+      1: 8269825918253da951f53d3b37ecdc1f60743e68c8fb8c59ebb4712ad71aed0b
+  score_request:
+    active: 1
+    released:
+      1: d5ca0a25173d96d5d1d0665c35e01410b96a347b7ada87c42a593466ec524a5d
+  suggest_tags:
+    active: 1
+    released:
+      1: a290dcd5dc2fe905ee91a62e2d47b2e9933e36c8fd229a6336c9e94141f65a1a

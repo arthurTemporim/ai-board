@@ -28,10 +28,13 @@ class AIRun(Base):
     prompt_name: Mapped[str | None] = mapped_column(String(80), default=None)
     prompt_version: Mapped[int | None] = mapped_column(default=None)
     model: Mapped[str | None] = mapped_column(String(80), default=None)
+    input_hash: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
     input: Mapped[dict | None] = mapped_column(JSON, default=None)
     output: Mapped[dict | None] = mapped_column(JSON, default=None)
     confidence: Mapped[float | None] = mapped_column(default=None)
     latency_ms: Mapped[int | None] = mapped_column(default=None)
+    tokens_in: Mapped[int | None] = mapped_column(default=None)
+    tokens_out: Mapped[int | None] = mapped_column(default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
     created_by_id: Mapped[int | None] = mapped_column(
         ForeignKey("user.id", ondelete="SET NULL"), default=None

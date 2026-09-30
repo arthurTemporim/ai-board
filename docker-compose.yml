@@ -10,6 +10,10 @@ services:
       DATABASE_URL: ${DATABASE_URL:-sqlite:////data/app.db}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
       MOCK_AI: ${MOCK_AI:-1}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-}
+      AI_MODEL_OVERRIDE: ${AI_MODEL_OVERRIDE:-}
     volumes:
       - .:/app
       - ./.data:/data
