@@ -1,0 +1,11 @@
+[2026-09-30T17:29:28-03:00] Prompt: Create a CLAUDE.md in the project root with a "Project Rules > Prompt Logging" rule (log every prompt to prompts.txt with ISO 8601 timestamp and summary).
+Response: Checked CLAUDE.md; the rule was already there (below the existing rtk instructions), so I left it unchanged. Created prompts.txt with this first entry.
+
+[2026-09-30T17:37:59-03:00] Prompt: Append a "Project Conventions" section to CLAUDE.md (monorepo layout, dependency direction, LangGraph vs MCP roles, versioned prompts, Pydantic structured output + human-applied suggestions, untrusted user text, lint/test/strict rules, MOCK_AI=1, no secrets/.env.example).
+Response: Appended "# Project Conventions" with the 9 rules at the end of CLAUDE.md; Prompt Logging section left unchanged.
+
+[2026-09-30T17:56:32-03:00] Prompt: Plan mode; design the Kanban + LangGraph/MCP/litellm AI triage system (9 requested plan items, challenge the design, up to 5 questions), then "make the project completely dockerized, Makefile calls docker compose to build frontend, backend and MCP services".
+Response: Asked 4 blocking questions (Save scope, raw payload, LLM backend, users), wrote and got approval for the plan incl. Docker section, then created docs/ARCHITECTURE.md and docs/PLAN.md. No application code written.
+
+[2026-09-30T18:10:14-03:00] Prompt: Implement Phase 1 of docs/PLAN.md (backend foundation): core/ SQLAlchemy models + Alembic + repositories/services; apps/api FastAPI CRUD routers (boards, columns, cards incl. atomic move/reorder, tags, comments, votes, feedback), consistent errors, CORS, /health; seed script with 2 boards / ~30 requests and data/seed/labels.json; Makefile setup/dev-api/seed/test; .env.example; pytest for move/reorder, voting, validation; commit.
+Response: Built all of it, dockerized (Makefile targets call docker compose; backend image + compose api service). 51 pytest tests pass, ruff clean, `make seed && make dev-api` verified from a clean DB (/health ok, /docs 200). Renamed migrations dir to migrations/ to avoid shadowing alembic. Committed.
