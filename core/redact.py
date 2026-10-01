@@ -18,6 +18,13 @@ _PATTERNS = (
 )
 
 
+def redacted_traceback() -> str:
+    """The current exception's traceback, as text, with secrets removed. Use instead of logging.exception()."""
+    import traceback
+
+    return redact(traceback.format_exc()) or ""
+
+
 def redact(text: str | None) -> str | None:
     if not text:
         return text

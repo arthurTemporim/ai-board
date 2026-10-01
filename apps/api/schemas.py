@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Annotated, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 from core.models import LinkKind, LinkStatus, RequesterType
 
@@ -352,10 +353,25 @@ class RunSummary(BaseModel):
     finished_at: datetime | None
 
 
+MAX_FREE_FORM_CHARS = 20_000
+
+
+def _bounded(value: dict | None) -> dict | None:
+    """Free-form objects are validated later by the code that uses them; this only caps their size."""
+    if value is not None and len(json.dumps(value, default=str)) > MAX_FREE_FORM_CHARS:
+        raise ValueError(f"must be smaller than {MAX_FREE_FORM_CHARS} characters when written as JSON")
+    return value
+
+
 class ResumeRequest(Input):
     decision: dict = Field(
         description='Answer to pending_action, e.g. {"verdict": "duplicate"} or {"actionable": true}'
     )
+
+    @field_validator("decision")
+    @classmethod
+    def _small_decision(cls, value: dict) -> dict:
+        return _bounded(value) or {}
 
 
 # ---- suggestions ---------------------------------------------------------------------------
@@ -379,6 +395,11 @@ class ScoreOverride(Input):
 class AcceptRequest(Input):
     edits: dict | None = Field(None, description="New values for the suggestion's editable fields")
     override: ScoreOverride | None = Field(None, description="Score suggestions only: change ratings, with a reason")
+
+    @field_validator("edits")
+    @classmethod
+    def _small_edits(cls, value: dict | None) -> dict | None:
+        return _bounded(value)
 
 
 class RejectRequest(Input):

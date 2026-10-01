@@ -51,3 +51,6 @@ The proxy serves local models, so: an OpenAI-compatible provider next to the Ant
 
 ## Phase 6 implementation notes (API + workflow + frontend, done)
 Workflow endpoints, suggestion accept/reject with audit, the AI panel, "Needs review" filter and the browser smoke test (`make e2e`). See `DECISIONS.md` ("Connecting the API, the workflow and the UI").
+
+## Phase 7 implementation notes (quality and hardening, done)
+`ai/evals` + `make eval` + `docs/EVAL_RESULTS.md`; the code review with fixes and the list of remaining limitations; the metrics endpoint and page with the manual baseline shown as an assumption; `make demo` for sample data. See `DECISIONS.md` ("Quality and hardening").

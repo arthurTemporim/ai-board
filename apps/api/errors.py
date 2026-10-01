@@ -19,6 +19,7 @@ from core.errors import (
     RateLimitError,
     UnauthorizedError,
 )
+from core.redact import redacted_traceback
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +67,6 @@ def install_error_handlers(app: FastAPI) -> None:
         return error_response(409, "integrity_error", "The change conflicts with existing data")
 
     @app.exception_handler(Exception)
-    async def unexpected(_: Request, exc: Exception):
-        log.exception("unhandled error", exc_info=exc)
+    async def unexpected(request: Request, exc: Exception):
+        log.error("unhandled error on %s %s\n%s", request.method, request.url.path, redacted_traceback())
         return error_response(500, "internal_error", "Internal server error")

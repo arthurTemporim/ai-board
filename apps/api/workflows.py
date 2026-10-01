@@ -28,6 +28,7 @@ from core.db import make_session_factory, session_scope
 from core.errors import ConflictError, InvalidInputError, RateLimitError
 from core.models import AIRun, RunStatus
 from core.models.types import utcnow
+from core.redact import redacted_traceback
 
 log = logging.getLogger(__name__)
 
@@ -172,7 +173,7 @@ class WorkflowRuntime:
             except asyncio.CancelledError:
                 raise
             except Exception:  # already recorded on the run; keep the server's log quiet but useful
-                log.exception("workflow run %s failed", run_id)
+                log.error("workflow run %s failed\n%s", run_id, redacted_traceback())
             finally:
                 self._tasks.pop(run_id, None)
                 self._active_cards.discard(card_id)

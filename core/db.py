@@ -37,6 +37,8 @@ def make_engine(url: str | None = None) -> Engine:
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.execute("PRAGMA journal_mode=WAL")
+            # The API and the MCP server processes write to one file; wait for a lock instead of failing.
+            cursor.execute("PRAGMA busy_timeout=30000")
             cursor.close()
 
     return engine

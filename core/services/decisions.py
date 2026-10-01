@@ -14,8 +14,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -32,6 +33,7 @@ from core.models import (
     LinkKind,
     LinkStatus,
     Problem,
+    RequesterType,
     Score,
     Tag,
     Vote,
@@ -77,6 +79,22 @@ class DecisionResult:
     message: str
     effects: dict[str, Any] = field(default_factory=dict)
     audit_id: int | None = None
+
+
+class FieldEdits(BaseModel):
+    """What a field-edit suggestion (or a person editing one) may set on a card. Same limits as the API."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)] | None = None
+    description: Annotated[str, StringConstraints(max_length=10000)] | None = None
+    requester_type: RequesterType | None = None
+    progress: int | None = Field(None, ge=0, le=100)
+    priority_score: float | None = Field(None, ge=0, le=100)
+
+
+def _clamp(text: str, limit: int) -> str:
+    return text.strip()[:limit]
 
 
 def _pick(edits: dict[str, Any], payload: dict[str, Any], key: str) -> str:
@@ -562,7 +580,11 @@ class DecisionService:
     def _accept_comms(self, card_id, draft, actor_id, sid, edits, override) -> DecisionResult:
         edits = self._check_edits("comms", edits)
         if edits:
-            draft.payload = {**draft.payload, **{k: str(v).strip() for k, v in edits.items()}}
+            limits = {"subject": 120, "body": 2000}
+            cleaned = {k: _clamp(str(v), limits[k]) for k, v in edits.items()}
+            if not all(cleaned.values()):
+                raise InvalidInputError("The subject and message cannot be empty", code="invalid_draft")
+            draft.payload = {**draft.payload, **cleaned}
         self._decide_draft(draft, DraftStatus.accepted, actor_id)
         entry = self._accepted(
             sid, card_id, actor_id, "comms", {"audience": draft.payload.get("audience")}, bool(edits)
@@ -585,7 +607,13 @@ class DecisionService:
                 "The card changed since this edit was suggested; reject it and run triage again",
                 code="version_conflict",
             )
-        fields = {**draft.payload.get("fields", {}), **edits}
+        try:
+            fields = FieldEdits.model_validate({**draft.payload.get("fields", {}), **edits}).model_dump(
+                exclude_unset=True
+            )
+        except ValidationError as exc:
+            problems = "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors())
+            raise InvalidInputError(f"Invalid card fields: {problems}", code="invalid_fields") from exc
         before = {k: getattr(card, k) for k in fields}
         CardService(self.session).update_card(card_id, fields, expected_version=card.version)
         self._decide_draft(draft, DraftStatus.applied, actor_id)
@@ -598,7 +626,7 @@ class DecisionService:
         edits = self._check_edits("new_problem", edits)
         card = self._card(card_id)
         title = _pick(edits, {"title": draft.payload.get("new_problem_title")}, "title")
-        statement = _pick(edits, {"statement": draft.payload.get("new_problem_statement")}, "statement")
+        statement = _pick(edits, {"statement": draft.payload.get("new_problem_statement")}, "statement")[:2000]
         if not title or len(title) > 200:
             raise InvalidInputError("The problem needs a title of 1-200 characters", code="invalid_problem")
         problem = Problem(board_id=card.board_id, title=title, statement=statement)

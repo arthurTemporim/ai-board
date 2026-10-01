@@ -3,7 +3,7 @@ COMPOSE ?= docker compose
 export HOST_UID := $(shell id -u)
 export HOST_GID := $(shell id -g)
 
-.PHONY: help setup dev dev-api dev-web build-web migrate seed freeze-prompts mcp-tools graph demo e2e test test-api test-web lint down clean
+.PHONY: help setup dev dev-api dev-web build-web migrate seed freeze-prompts mcp-tools graph demo eval e2e test test-api test-web lint down clean
 
 help:
 	@echo "setup    build images, create .env and .data/"
@@ -16,6 +16,7 @@ help:
 	@echo "freeze-prompts  record hashes of new prompt versions so they can no longer be edited"
 	@echo "mcp-tools  start every MCP server and list all their tools"
 	@echo "graph    run the triage workflow: make graph ARGS='--card-id 1 --steps analyze,score'"
+	@echo "eval     score find_related on the seed data vs labels.json; writes docs/EVAL_RESULTS.md (real mode too if a model is configured)"
 	@echo "demo     add sample cards and human decisions (mock mode) so the metrics page has data; run after seed"
 	@echo "e2e      browser test of the triage flow in mock mode (own database and ports; your data is untouched)"
 	@echo "test     run the backend (pytest) and frontend (vitest) tests; test-api / test-web for one"
@@ -56,6 +57,9 @@ mcp-tools:
 
 graph: | .data
 	$(COMPOSE) run --rm --no-deps api python -m ai.graph.run $(ARGS)
+
+eval: | .data
+	$(COMPOSE) run --rm api python -m ai.evals.run $(ARGS)
 
 demo: | .data
 	$(COMPOSE) run --rm api python -m data.seed.demo $(ARGS)
