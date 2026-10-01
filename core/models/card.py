@@ -40,20 +40,24 @@ class Card(Base):
     position: Mapped[int] = mapped_column(default=0)
     title: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
-    requester_type: Mapped[RequesterType] = mapped_column(
-        enum_column(RequesterType), default=RequesterType.unknown
-    )
+    requester_type: Mapped[RequesterType] = mapped_column(enum_column(RequesterType), default=RequesterType.unknown)
     progress: Mapped[int] = mapped_column(default=0)
     priority_score: Mapped[float | None] = mapped_column(default=None)
     # Optimistic concurrency: bumped on every edit or move of this card.
     version: Mapped[int] = mapped_column(default=1)
-    created_by_id: Mapped[int | None] = mapped_column(
-        ForeignKey("user.id", ondelete="SET NULL"), default=None
-    )
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("user.id", ondelete="SET NULL"), default=None)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
-    tags: Mapped[list[Tag]] = relationship(
-        secondary="card_tag", order_by="Tag.name", lazy="selectin"
-    )
+    tags: Mapped[list[Tag]] = relationship(secondary="card_tag", order_by="Tag.name", lazy="selectin")
     # vote_count and comment_count are added in core.models.engagement as read-only subqueries.
+
+    @property
+    def pending_suggestion_count(self) -> int:
+        """AI suggestions waiting for a person: drafts, suggested links and suggested problems."""
+        return self.pending_draft_count + self.suggested_link_count + self.suggested_problem_count  # type: ignore[attr-defined]
+
+    @property
+    def needs_review(self) -> bool:
+        """True if a person has something to decide: a suggestion, or a run paused for their answer."""
+        return self.pending_suggestion_count > 0 or self.review_run_count > 0  # type: ignore[attr-defined]

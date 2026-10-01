@@ -20,9 +20,7 @@ class AIRun(Base):
     parent_run_id: Mapped[int | None] = mapped_column(
         ForeignKey("ai_run.id", ondelete="CASCADE"), default=None, index=True
     )
-    card_id: Mapped[int | None] = mapped_column(
-        ForeignKey("card.id", ondelete="SET NULL"), default=None, index=True
-    )
+    card_id: Mapped[int | None] = mapped_column(ForeignKey("card.id", ondelete="SET NULL"), default=None, index=True)
     kind: Mapped[str] = mapped_column(String(40))  # "workflow" or a step/node name
     status: Mapped[RunStatus] = mapped_column(enum_column(RunStatus), default=RunStatus.pending)
     prompt_name: Mapped[str | None] = mapped_column(String(80), default=None)
@@ -36,9 +34,7 @@ class AIRun(Base):
     tokens_in: Mapped[int | None] = mapped_column(default=None)
     tokens_out: Mapped[int | None] = mapped_column(default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
-    created_by_id: Mapped[int | None] = mapped_column(
-        ForeignKey("user.id", ondelete="SET NULL"), default=None
-    )
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("user.id", ondelete="SET NULL"), default=None)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, default=None)
 
@@ -50,16 +46,12 @@ class Draft(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     card_id: Mapped[int] = mapped_column(ForeignKey("card.id", ondelete="CASCADE"), index=True)
-    run_id: Mapped[int | None] = mapped_column(
-        ForeignKey("ai_run.id", ondelete="SET NULL"), default=None
-    )
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("ai_run.id", ondelete="SET NULL"), default=None)
     kind: Mapped[DraftKind] = mapped_column(enum_column(DraftKind))
     payload: Mapped[dict] = mapped_column(JSON)
     confidence: Mapped[float | None] = mapped_column(default=None)
     status: Mapped[DraftStatus] = mapped_column(enum_column(DraftStatus), default=DraftStatus.pending)
-    decided_by_id: Mapped[int | None] = mapped_column(
-        ForeignKey("user.id", ondelete="SET NULL"), default=None
-    )
+    decided_by_id: Mapped[int | None] = mapped_column(ForeignKey("user.id", ondelete="SET NULL"), default=None)
     decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime, default=None)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
@@ -71,9 +63,7 @@ class Score(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     card_id: Mapped[int] = mapped_column(ForeignKey("card.id", ondelete="CASCADE"), index=True)
-    run_id: Mapped[int | None] = mapped_column(
-        ForeignKey("ai_run.id", ondelete="SET NULL"), default=None
-    )
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("ai_run.id", ondelete="SET NULL"), default=None)
     rubric_name: Mapped[str] = mapped_column(String(80))
     rubric_version: Mapped[int] = mapped_column(default=1)
     per_criterion: Mapped[dict] = mapped_column(JSON)
@@ -81,10 +71,18 @@ class Score(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
-# Number of AI drafts waiting for a human decision; shown as an indicator on the card.
+# AI drafts waiting for a human decision. Merge proposals (kind "link") are left out: the suggested
+# CardLink they belong to is counted by Card.suggested_link_count, so one finding is not counted twice.
 Card.pending_draft_count = column_property(
     select(func.count(Draft.id))
-    .where(Draft.card_id == Card.id, Draft.status == DraftStatus.pending)
+    .where(Draft.card_id == Card.id, Draft.status == DraftStatus.pending, Draft.kind != DraftKind.link)
     .correlate_except(Draft)
+    .scalar_subquery()
+)
+# Workflow runs paused at a human checkpoint for this card.
+Card.review_run_count = column_property(
+    select(func.count(AIRun.id))
+    .where(AIRun.card_id == Card.id, AIRun.kind == "workflow", AIRun.status == RunStatus.awaiting_human)
+    .correlate_except(AIRun)
     .scalar_subquery()
 )

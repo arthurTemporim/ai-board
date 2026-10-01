@@ -3,7 +3,7 @@ COMPOSE ?= docker compose
 export HOST_UID := $(shell id -u)
 export HOST_GID := $(shell id -g)
 
-.PHONY: help setup dev dev-api dev-web build-web migrate seed freeze-prompts mcp-tools graph test test-api test-web lint down clean
+.PHONY: help setup dev dev-api dev-web build-web migrate seed freeze-prompts mcp-tools graph demo e2e test test-api test-web lint down clean
 
 help:
 	@echo "setup    build images, create .env and .data/"
@@ -16,6 +16,8 @@ help:
 	@echo "freeze-prompts  record hashes of new prompt versions so they can no longer be edited"
 	@echo "mcp-tools  start every MCP server and list all their tools"
 	@echo "graph    run the triage workflow: make graph ARGS='--card-id 1 --steps analyze,score'"
+	@echo "demo     add sample cards and human decisions (mock mode) so the metrics page has data; run after seed"
+	@echo "e2e      browser test of the triage flow in mock mode (own database and ports; your data is untouched)"
 	@echo "test     run the backend (pytest) and frontend (vitest) tests; test-api / test-web for one"
 	@echo "lint     run ruff and the TypeScript typecheck"
 	@echo "down     stop containers"
@@ -54,6 +56,23 @@ mcp-tools:
 
 graph: | .data
 	$(COMPOSE) run --rm --no-deps api python -m ai.graph.run $(ARGS)
+
+demo: | .data
+	$(COMPOSE) run --rm api python -m data.seed.demo $(ARGS)
+
+# The end-to-end test runs in a separate Compose project with its own database, ports and checkpoint
+# file, in MOCK_AI mode, so it never touches your dev data or calls a real model.
+E2E_ENV = COMPOSE_PROJECT_NAME=mectacto-e2e MOCK_AI=1 API_PORT=8100 WEB_PORT=5273 \
+	DATABASE_URL=sqlite:////data/e2e.db GRAPH_CHECKPOINT_PATH=/data/e2e-checkpoints.db
+
+e2e: | .data
+	rm -f .data/e2e.db* .data/e2e-checkpoints.db*
+	$(E2E_ENV) $(COMPOSE) run --rm api sh -c "alembic upgrade head && python -m data.seed.seed --reset"
+	$(E2E_ENV) $(COMPOSE) up -d --build --wait api web
+	mkdir -p e2e/out
+	docker run --rm --network host -e E2E_URL=http://localhost:5273 -v "$(CURDIR)/e2e:/e2e" -w /e2e \
+		mcr.microsoft.com/playwright:v1.49.0-noble sh -c "npm i playwright@1.49.0 --no-audit --no-fund >/dev/null 2>&1 && node triage-flow.mjs"; \
+		status=$$?; $(E2E_ENV) $(COMPOSE) down >/dev/null 2>&1; exit $$status
 
 test: test-api test-web
 

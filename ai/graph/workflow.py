@@ -13,6 +13,7 @@ State is checkpointed to SQLite after every node, so a paused run survives the p
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from contextlib import AsyncExitStack
@@ -92,7 +93,14 @@ class Workflow:
     async def start(
         self, card_id: int, steps: list[str] | str | None = None, *, created_by_id: int | None = None
     ) -> RunReport:
-        """Start a run on a card. `steps` picks which steps to run (names or aliases); None runs all."""
+        """Start a run on a card and wait for it to finish or pause. `steps` picks which steps to run."""
+        run_id, state = await self.begin(card_id, steps, created_by_id=created_by_id)
+        return await self._drive(run_id, state)
+
+    async def begin(
+        self, card_id: int, steps: list[str] | str | None = None, *, created_by_id: int | None = None
+    ) -> tuple[int, dict[str, Any]]:
+        """Record a new run and return (run_id, initial state) without running it; see `execute`."""
         requested = normalise_steps(steps)
         with session_scope(self.session_factory) as session:
             run = AIRun(
@@ -119,6 +127,10 @@ class Workflow:
             "errors": [],
             "human_decisions": [],
         }
+        return run_id, state
+
+    async def execute(self, run_id: int, state: dict[str, Any]) -> RunReport:
+        """Run a recorded run to completion or until it pauses for a person."""
         return await self._drive(run_id, state)
 
     async def resume(self, run_id: int, decision: dict[str, Any]) -> RunReport:
@@ -130,7 +142,15 @@ class Workflow:
     async def _drive(self, run_id: int, graph_input: Any) -> RunReport:
         thread = self._thread(run_id)
         try:
-            await self.graph.ainvoke(graph_input, thread)
+            await asyncio.wait_for(self.graph.ainvoke(graph_input, thread), self.config.run_timeout)
+        except TimeoutError:
+            self.ctx.finish_step(
+                run_id, RunStatus.failed, error=f"The run took longer than {self.config.run_timeout:g}s"
+            )
+            raise
+        except asyncio.CancelledError:
+            self.ctx.finish_step(run_id, RunStatus.failed, error="The run was cancelled (server shutting down)")
+            raise
         except Exception as exc:  # a bug in the graph itself; node errors never get here
             self.ctx.finish_step(run_id, RunStatus.failed, error=f"{type(exc).__name__}: {exc}"[:2000])
             raise

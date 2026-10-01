@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tansta
 import { applyMove, type Move } from '../board/dnd';
 import { useToast } from '../state/toast';
 import { api, ApiError } from './client';
-import type { BoardDetail, Card, CardCreateInput, CardUpdateInput } from './types';
+import type { BoardDetail, Card, CardCreateInput, CardUpdateInput, Run, TriageCardInput } from './types';
 
 export const keys = {
   users: ['users'] as const,
@@ -11,6 +11,11 @@ export const keys = {
   card: (id: number) => ['card', id] as const,
   tags: (boardId: number) => ['tags', boardId] as const,
   votes: (cardId: number, userId: number | null) => ['votes', cardId, userId] as const,
+  suggestions: (cardId: number) => ['suggestions', cardId] as const,
+  audit: (cardId: number) => ['audit', cardId] as const,
+  run: (runId: number) => ['run', runId] as const,
+  cardRuns: (cardId: number) => ['card-runs', cardId] as const,
+  metrics: ['metrics'] as const,
 };
 
 export const errorText = (error: unknown): string =>
@@ -154,3 +159,94 @@ export function useTagMutations(boardId: number) {
     remove: useMutation({ mutationFn: (id: number) => api.tags.remove(id), onSuccess: refresh }),
   };
 }
+
+// ---- AI triage ----------------------------------------------------------------------------------
+export const useSuggestions = (cardId: number) =>
+  useQuery({ queryKey: keys.suggestions(cardId), queryFn: () => api.suggestions.list(cardId) });
+export const useAudit = (cardId: number, enabled: boolean) =>
+  useQuery({ queryKey: keys.audit(cardId), queryFn: () => api.suggestions.audit(cardId), enabled });
+export const useMetrics = () => useQuery({ queryKey: keys.metrics, queryFn: api.metrics.get });
+
+/** The card's most recent run, so progress is shown again after a refresh or when reopening the drawer. */
+export const useLatestRun = (cardId: number) =>
+  useQuery({
+    queryKey: keys.cardRuns(cardId),
+    queryFn: async () => (await api.workflows.runsForCard(cardId, 1))[0] ?? null,
+  });
+
+/** A run, polled every second until it finishes or waits for a person. */
+export const useRun = (runId: number | null, forcePoll = false) =>
+  useQuery({
+    queryKey: keys.run(runId ?? 0),
+    queryFn: () => api.workflows.run(runId as number),
+    enabled: runId !== null,
+    refetchInterval: (query) =>
+      forcePoll || query.state.data === undefined || query.state.data.status === 'running' ? 1000 : false,
+  });
+
+const invalidateCard = (qc: QueryClient, card: { id: number; board_id: number }) =>
+  Promise.all([
+    qc.invalidateQueries({ queryKey: keys.board(card.board_id) }),
+    qc.invalidateQueries({ queryKey: keys.card(card.id) }),
+    qc.invalidateQueries({ queryKey: keys.suggestions(card.id) }),
+    qc.invalidateQueries({ queryKey: keys.audit(card.id) }),
+    qc.invalidateQueries({ queryKey: keys.metrics }),
+  ]);
+
+/** Start triage (all steps, or a list) on a card. */
+export function useStartTriage(card: Pick<Card, 'id' | 'board_id'>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (steps?: string[]) =>
+      steps?.length === 1 ? api.workflows.step(steps[0] as string, card.id) : api.workflows.triage({ card_id: card.id }, steps),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.cardRuns(card.id) }),
+  });
+}
+
+/** Create a card from a payload and triage it in one call. */
+export function useCreateAndTriage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (card: TriageCardInput) => api.workflows.triage({ card }),
+    onSuccess: (accepted) =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: ['board'] }),
+        qc.invalidateQueries({ queryKey: keys.cardRuns(accepted.card_id) }),
+      ]),
+  });
+}
+
+export function useResumeRun(card: Pick<Card, 'id' | 'board_id'>, runId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (decision: Record<string, unknown>) => api.workflows.resume(runId, decision),
+    onSuccess: () =>
+      Promise.all([qc.invalidateQueries({ queryKey: keys.run(runId) }), qc.invalidateQueries({ queryKey: keys.cardRuns(card.id) })]),
+  });
+}
+
+/** Call when a run changes state, so the board, the card and the suggestion list catch up. */
+export function useRefreshAfterRun(card: Pick<Card, 'id' | 'board_id'>) {
+  const qc = useQueryClient();
+  return () => invalidateCard(qc, card);
+}
+
+export function useAcceptSuggestion(card: Pick<Card, 'id' | 'board_id'>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { sid: string; edits?: Record<string, unknown>; override?: { ratings: Record<string, number>; reason: string } }) =>
+      api.suggestions.accept(card.id, args.sid, { edits: args.edits, override: args.override }),
+    // Accepting can change other cards too (votes move to the primary card), so refetch every board.
+    onSettled: () => Promise.all([invalidateCard(qc, card), qc.invalidateQueries({ queryKey: ['board'] }), qc.invalidateQueries({ queryKey: ['card'] })]),
+  });
+}
+
+export function useRejectSuggestion(card: Pick<Card, 'id' | 'board_id'>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { sid: string; reason?: string }) => api.suggestions.reject(card.id, args.sid, args.reason),
+    onSettled: () => invalidateCard(qc, card),
+  });
+}
+
+export type { Run };

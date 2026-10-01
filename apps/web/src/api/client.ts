@@ -1,4 +1,5 @@
 import type {
+  AuditEntry,
   Board,
   BoardDetail,
   Card,
@@ -6,9 +7,16 @@ import type {
   CardDetail,
   CardUpdateInput,
   Comment,
+  Decision,
   ErrorDetail,
   Feedback,
+  Metrics,
+  Run,
+  RunAccepted,
+  RunSummary,
+  Suggestion,
   Tag,
+  TriageCardInput,
   User,
   VoteSummary,
 } from './types';
@@ -78,6 +86,24 @@ const query = (params: Record<string, string | number | undefined>): string => {
 };
 
 export const api = {
+  workflows: {
+    triage: (target: { card_id: number } | { card: TriageCardInput }, steps?: string[]) =>
+      request<RunAccepted>('POST', '/workflows/triage', { ...target, ...(steps ? { steps } : {}) }),
+    step: (step: string, cardId: number) => request<RunAccepted>('POST', `/workflows/steps/${step}`, { card_id: cardId }),
+    run: (runId: number) => request<Run>('GET', `/workflows/runs/${runId}`),
+    runsForCard: (cardId: number, limit = 5) => request<RunSummary[]>('GET', `/workflows/runs${query({ card_id: cardId, limit })}`),
+    resume: (runId: number, decision: Record<string, unknown>) =>
+      request<RunSummary>('POST', `/workflows/runs/${runId}/resume`, { decision }),
+  },
+  suggestions: {
+    list: (cardId: number) => request<Suggestion[]>('GET', `/cards/${cardId}/suggestions`),
+    accept: (cardId: number, sid: string, body: { edits?: Record<string, unknown>; override?: { ratings: Record<string, number>; reason: string } } = {}) =>
+      request<Decision>('POST', `/cards/${cardId}/suggestions/${sid}/accept`, body),
+    reject: (cardId: number, sid: string, reason?: string) =>
+      request<Decision>('POST', `/cards/${cardId}/suggestions/${sid}/reject`, reason ? { reason } : {}),
+    audit: (cardId: number) => request<AuditEntry[]>('GET', `/cards/${cardId}/audit`),
+  },
+  metrics: { get: () => request<Metrics>('GET', '/metrics') },
   users: { list: () => request<User[]>('GET', '/users') },
   boards: {
     list: () => request<Board[]>('GET', '/boards'),

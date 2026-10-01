@@ -8,6 +8,8 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
 "data/seed/seed_data.py" = ["E501"]  # prose strings
+"data/seed/demo.py" = ["E501"]  # sample request text
+"core/services/metrics.py" = ["E501"]  # prose definitions shown on the metrics page
 "tests/graph/conftest.py" = ["F811"]  # re-exports the `db` fixture that tests then take as an argument
 "ai/mcp_servers/*/server.py" = ["E501"]  # a tool's docstring is its description; one line each
 

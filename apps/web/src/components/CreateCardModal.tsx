@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { errorText, useCreateCard } from '../api/hooks';
+import { errorText, useCreateAndTriage, useCreateCard } from '../api/hooks';
 import { REQUESTER_TYPES, type BoardDetail, type RequesterType, type Tag } from '../api/types';
 import { useToast } from '../state/toast';
 import { Modal } from './Modal';
@@ -14,6 +14,7 @@ interface Props {
 
 export function CreateCardModal({ board, tags, onClose, onCreated }: Props) {
   const create = useCreateCard();
+  const createAndTriage = useCreateAndTriage();
   const toast = useToast();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -21,6 +22,23 @@ export function CreateCardModal({ board, tags, onClose, onCreated }: Props) {
   const [columnId, setColumnId] = useState(board.columns[0]?.id ?? 0);
   const [tagIds, setTagIds] = useState<number[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  const triage = () => {
+    if (!title.trim()) {
+      setError('Enter a title.');
+      return;
+    }
+    createAndTriage.mutate(
+      { board_id: board.id, column_id: columnId, title: title.trim(), description, requester_type: requester, tag_ids: tagIds },
+      {
+        onSuccess: (accepted) => {
+          toast.info('Card created. AI triage is running');
+          onCreated(accepted.card_id);
+        },
+        onError: (e) => setError(errorText(e)),
+      },
+    );
+  };
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -102,7 +120,10 @@ export function CreateCardModal({ board, tags, onClose, onCreated }: Props) {
           <button type="button" className="btn" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="btn btn-primary" disabled={create.isPending}>
+          <button type="button" className="btn" disabled={create.isPending || createAndTriage.isPending} onClick={triage}>
+            {createAndTriage.isPending ? 'Starting…' : 'Create and run AI triage'}
+          </button>
+          <button type="submit" className="btn btn-primary" disabled={create.isPending || createAndTriage.isPending}>
             {create.isPending ? 'Creating…' : 'Create card'}
           </button>
         </div>

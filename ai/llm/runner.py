@@ -23,6 +23,7 @@ from ai.llm.registry import PromptRegistry, default_registry
 from core.db import session_scope
 from core.models import AIRun, RunStatus
 from core.models.types import utcnow
+from core.redact import redact
 
 
 @dataclass
@@ -76,7 +77,7 @@ def run_prompt(
     except Exception as exc:
         if run is not None and session is not None:
             run.status = RunStatus.failed
-            run.error = f"{type(exc).__name__}: {exc}"[:2000]
+            run.error = (redact(f"{type(exc).__name__}: {exc}") or "")[:2000]
             run.latency_ms = round((perf_counter() - started) * 1000)
             run.finished_at = utcnow()
             session.flush()
@@ -147,7 +148,7 @@ def run_prompt_logged(
             failed = session.get(AIRun, run_id)
             if failed is not None:
                 failed.status = RunStatus.failed
-                failed.error = f"{type(exc).__name__}: {exc}"[:2000]
+                failed.error = (redact(f"{type(exc).__name__}: {exc}") or "")[:2000]
                 failed.latency_ms = round((perf_counter() - started) * 1000)
                 failed.finished_at = utcnow()
         raise

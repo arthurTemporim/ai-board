@@ -75,19 +75,24 @@ Differences from the first design: `compute_score`/`compare_to_peers` became `co
   6. `comms` -> `{audience, subject, body, tone}`
 
 ## 5. API contract (FastAPI `apps/api`, prefix `/api`)
-Mutating calls take `X-User-Id`; card writes require `version` (409 on mismatch).
-- `GET /boards`, `POST /boards`, `GET /boards/{id}` (columns + light cards).
-- `PUT /boards/{id}/layout` `{columns:[{id,name,position}], moves:[{card_id, column_id, position, version}]}`: the board-level Save.
-- `GET /cards/{id}` (full detail + suggestions), `POST /cards`, `PATCH /cards/{id}` `{fields, tags_add, tags_remove, applied_suggestion_ids, version}`: the drawer Save.
-- `POST /cards/{id}/comments`, `POST /cards/{id}/feedback`, `POST /cards/{id}/votes`.
-- `GET /tags?board_id`, `POST /tags`; `GET /boards/{id}/cards?tag=&q=`.
-- `GET/PUT /boards/{id}/rubric`.
-- `POST /workflow/runs` `{card_id}` or `{card:{board_id,title,description,requester_type}}`, optional `steps[]`, `require_brief_approval` -> `202 {run_id, card_id, status}`.
-- `POST /workflow/runs/{id}/steps/{step}`: single-step shortcut.
-- `GET /workflow/runs/{id}` -> `{status, completed_steps, pending_interrupt:{kind,payload}|null, suggestions[], ai_calls[], error}` (poll 1-2 s).
-- `POST /workflow/runs/{id}/resume` `{interrupt_id, value}`.
-- `POST /suggestions/{id}/decision` `{decision: accept|reject}` only marks the decision and returns the proposed patch. Nothing is applied until the card Save sends `applied_suggestion_ids`; `core` applies them atomically and rejects if `version` changed.
-- Runs execute as an asyncio background task (`ainvoke`). No SSE; polling suffices.
+Mutating calls that need a person take `X-User-Id`. Errors always look like `{"error": {"code", "message", "details"}}`. Interactive docs at `/docs`.
+
+**Board** (Phase 1): boards, columns, cards (create, edit with `version` conflict detection, delete, `POST /cards/{id}/move`), tags, comments, feedback, votes. A card carries `duplicate_count`, `related_count`, `pending_suggestion_count` and `needs_review` (true when a suggestion or a run paused for an answer is waiting).
+
+**Workflows** (Phase 6) run in the background; the request returns as soon as the run is recorded.
+- `POST /workflows/triage` `{card_id}` or `{card: {board_id, title, description, requester_type, ...}}`, optional `steps[]` (names or aliases). A payload creates the card first. `202 {run_id, card_id, status, steps_requested, card_created}`.
+- `POST /workflows/steps/{step}` `{card_id | card}`: one step. `GET /workflows/runs?card_id=&limit=` recent runs.
+- `GET /workflows/runs/{id}`: `status` (running | awaiting_human | succeeded | failed), `outcome`, `steps[]` (status, result, error, skip reason, timings), `progress {done,total}`, `pending_action` (the question when paused), `human_decisions`, `errors`. Read from the AIRun rows, so it works while the run is busy and after a restart.
+- `POST /workflows/runs/{id}/resume` `{decision}`: the answer is validated first (422 with the reason) and the run continues in the background. 409 if the run is not waiting.
+- Limits: one active run per card (409), `WORKFLOW_MAX_CONCURRENT_RUNS` active runs (429).
+
+**Suggestions and decisions** (Phase 6): the only way an AI suggestion changes the board.
+- `GET /cards/{id}/suggestions[?include_decided=true]`: duplicates and related cards (confidence, reasoning, what a merge would move), problem grouping, tags, scores per criterion with rationale, the decision brief, message drafts. Ids are `draft:N`, `link:N` or `problem:CARD:PROBLEM`.
+- `POST /cards/{id}/suggestions/{sid}/accept` `{edits?, override?}` applies it; `/reject` `{reason?}` records the refusal (a rejected link or problem is never proposed again). Both need `X-User-Id` and write an audit entry in the same transaction. A suggestion can be decided once (409 after).
+- `GET /cards/{id}/audit`: the decisions on a card, newest first.
+- `GET /metrics` (Phase 7): numbers computed from the audit log, with definitions and the labelled baseline assumption.
+
+What accepting does, by type: **duplicate** moves the duplicate's votes to the primary card (the older one, unless the merge proposal says otherwise; votes by someone who already voted on the primary are dropped, not doubled), confirms the link and keeps both cards linked; **related** confirms the link; **problem** confirms the attachment, **new problem** creates it and attaches the card; **tag** adds it (creating it if needed); **score** sets the card's priority to the AI total, or, with `override {ratings, reason}`, to a recomputed total (a reason of at least 3 characters is required, and the AI total, the new total and the changes are audited); **brief** and **comment** post a comment as the person accepting; **message draft** is approved, and nothing is sent; **field edit** is applied unless the card changed since it was suggested (409).
 
 ## 6. Frontend (apps/web: React + Vite + TS strict + Tailwind + dnd-kit)
 - Pages: `BoardListPage`, `BoardPage`. Components: `BoardHeader` (board switcher, user picker, tag filter, search, Save/Discard with dirty badge), `Column`, `CardTile`, `CardDrawer` (Details, Comments, Feedback, Grouping, AI tabs), `SuggestionItem`, `RunPanel` (step checkboxes, run all/step, progress, interrupt form), `RubricSettings`.

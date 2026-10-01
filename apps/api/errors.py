@@ -16,6 +16,7 @@ from core.errors import (
     ForbiddenError,
     InvalidInputError,
     NotFoundError,
+    RateLimitError,
     UnauthorizedError,
 )
 
@@ -27,6 +28,7 @@ STATUS_BY_ERROR: dict[type[DomainError], int] = {
     InvalidInputError: 422,
     ForbiddenError: 403,
     UnauthorizedError: 401,
+    RateLimitError: 429,
 }
 
 
@@ -49,8 +51,7 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def validation_error(_: Request, exc: RequestValidationError):
         details = [
-            {"field": _field_path(e["loc"]), "message": e["msg"].removeprefix("Value error, ")}
-            for e in exc.errors()
+            {"field": _field_path(e["loc"]), "message": e["msg"].removeprefix("Value error, ")} for e in exc.errors()
         ]
         return error_response(422, "validation_error", "Request validation failed", details)
 

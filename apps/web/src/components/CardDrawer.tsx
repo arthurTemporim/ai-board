@@ -16,6 +16,7 @@ import { formatDate, formatDateTime } from '../lib/format';
 import { hrefFor } from '../state/urlState';
 import { useCurrentUser } from '../state/user';
 import { useToast } from '../state/toast';
+import { AiPanel } from './AiPanel';
 import { TagPicker } from './TagPicker';
 import { useDialog } from './useDialog';
 
@@ -262,6 +263,7 @@ function DrawerBody({
         </div>
       </form>
 
+      <AiPanel card={card} onOpenCard={onOpenCard} />
       <VotesSection card={card} />
       <GroupingSection card={card} board={board} onOpenCard={onOpenCard} />
       <CommentsSection card={card} />
@@ -298,8 +300,8 @@ function VotesSection({ card }: { card: CardDetail }) {
 }
 
 function GroupingSection({ card, board, onOpenCard }: { card: CardDetail; board: BoardDetail; onOpenCard: (id: number) => void }) {
-  const duplicates = card.links.filter((l) => l.kind === 'duplicate');
-  const related = card.links.filter((l) => l.kind === 'related');
+  const duplicates = card.links.filter((l) => l.kind === 'duplicate' && l.status !== 'rejected');
+  const related = card.links.filter((l) => l.kind === 'related' && l.status !== 'rejected');
   const list = (items: CardDetail['links']) => (
     <ul className="space-y-1">
       {items.map((link) => (
@@ -315,7 +317,7 @@ function GroupingSection({ card, board, onOpenCard }: { card: CardDetail; board:
           >
             {link.title}
           </a>
-          <span className="text-xs text-slate-500">{link.status === 'suggested' ? 'suggested' : 'confirmed'}</span>
+          <span className="text-xs text-slate-500">{link.status}</span>
         </li>
       ))}
     </ul>

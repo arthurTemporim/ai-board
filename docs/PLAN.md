@@ -48,3 +48,6 @@ The proxy serves local models, so: an OpenAI-compatible provider next to the Ant
 
 ## Phase 5 implementation notes (LangGraph workflow, done)
 `ai/graph`: state, nine nodes (eight steps plus the `human_checkpoint`, `needs_info` and `merge_proposal` routes), SQLite checkpointer, `Workflow` class and the `python -m ai.graph.run` CLI (`make graph ARGS="--card-id 1 --steps analyze,score"`). See `DECISIONS.md` ("LangGraph workflow") for the behaviour on real models, including what it does not yet get right.
+
+## Phase 6 implementation notes (API + workflow + frontend, done)
+Workflow endpoints, suggestion accept/reject with audit, the AI panel, "Needs review" filter and the browser smoke test (`make e2e`). See `DECISIONS.md` ("Connecting the API, the workflow and the UI").

@@ -143,3 +143,23 @@ See `ARCHITECTURE.md` section 2 for the design; this records the choices and wha
 **Mock mode is a wiring test, not a quality test.** Under `MOCK_AI=1` the hash embedder scores differently worded duplicates at about 0.17, below the default `min_similarity` (0.2), so the seed's duplicates are not surfaced; the tests use a lower floor and near-identical text.
 
 **Not here yet.** The API endpoints that start, poll and resume runs and that apply accepted suggestions come next; `Workflow` is the object they will call.
+
+## Connecting the API, the workflow and the UI (Phase 6)
+
+**Runs are background tasks in the API process, reading is database-only.** `WorkflowRuntime` starts one `Workflow` (one set of MCP server processes, one checkpoint connection) on the first request and shares it. The MCP sessions use anyio scopes that must be opened and closed by the same task, but every HTTP request is its own task, so a dedicated host task owns the workflow for the life of the process (found by the first test run: "exit cancel scope in a different task"). `GET /workflows/runs/{id}` is built from the AIRun rows alone (`ai/graph/reports.py`); a paused checkpoint writes its question to its step row. So polling is cheap, works while the run is busy, and survives a restart. On startup, runs left `running` by a previous process are marked failed ("Interrupted by a server restart"); runs waiting for a person are kept, because their state is in the checkpoint file.
+
+**The card is committed before the run starts.** The graph reads it through MCP servers in other processes, so the card (from a `{card: ...}` payload) is created in its own committed transaction first.
+
+**Accepting is the only door.** `core/services/decisions.py` is the one place a suggestion becomes a change, and it writes the audit entry in the same transaction. Suggestions live in three tables (drafts, links, problem attachments), so ids are `draft:N`, `link:N`, `problem:C:P`. Routes are card-scoped (`/cards/{id}/suggestions/...`) so the audit entry knows which card the person was looking at, and a suggestion can only be decided from a card it belongs to.
+
+**Choices the brief left open:**
+- *Which card survives a merge:* the older one, unless the merge proposal names another. The duplicate card is **not** deleted, moved or closed; only its votes move (people who already voted on the primary are dropped, so nobody counts twice) and the two stay linked. There is no undo button; the audit entry lists the moved user ids, so it can be reversed by hand.
+- *Accepting a brief or a comment* posts it as a comment by the person accepting, so it becomes part of the card's record. *Accepting a message draft* only marks it approved: **nothing is ever sent** (there is no email/Slack integration); the person copies it.
+- *Score "edit"* is an override of individual ratings with a required reason. The total is recomputed by the rubric code, never typed in by hand, so it stays consistent with the weights.
+- *Rejecting is remembered:* `rejected` is a link/problem status, `suggest_link` never refreshes a rejected link, and `find_related` skips pairs a person already decided, which also saves model calls.
+- *"Needs review"* means a pending suggestion, a suggested link or problem (on either card of a pair), or a run paused at a checkpoint. Merge proposals are not counted twice (they belong to the link).
+- *Filters and dragging:* the "Needs review" filter turns dragging off like the other filters.
+
+**Frontend.** The AI panel in the card drawer has "Run AI triage", a "Run one step" menu, a progress indicator (polled every second while running), the checkpoint question when paused, and the suggestion list grouped by kind with accept / edit / reject (and Override for scores). The board has a "Needs review" filter with a count; the card tile shows duplicate, related and pending-suggestion indicators. "New card" can also "Create and run AI triage" in one step. No new dependencies.
+
+**Verification.** API tests start real MCP server processes against a temporary SQLite file and run the real graph in mock mode (`tests/workflow_api`), including the acceptance flow; decision logic is tested for every suggestion type and error (`tests/test_suggestions_api.py`); `make e2e` drives the real UI in Chromium against an isolated stack (own database, own ports, mock mode): submit a duplicate of a seeded card, run triage, see the merge suggestion with confidence and reasoning, accept it, watch the votes consolidate (7 to 8), check the audit trail, the "Needs review" filter and the metrics page.

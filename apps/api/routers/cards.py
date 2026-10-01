@@ -14,7 +14,7 @@ from apps.api.schemas import (
     LinkRead,
     ProblemRead,
 )
-from core.models import RequesterType
+from core.models import LinkStatus, RequesterType
 from core.services.cards import CardService
 
 router = APIRouter(prefix="/cards", tags=["cards"])
@@ -57,10 +57,12 @@ def get_card(card_id: int, session: SessionDep):
         "links": [
             LinkRead(card_id=other.id, title=other.title, kind=link.kind, status=link.status)
             for link, other in detail.links
+            if link.status != LinkStatus.rejected
         ],
         "problems": [
             ProblemRead(id=problem.id, title=problem.title, status=cp.status)
             for cp, problem in detail.problems
+            if cp.status != LinkStatus.rejected
         ],
         "latest_score": detail.latest_score,
     }

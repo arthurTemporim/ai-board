@@ -9,19 +9,28 @@ describe('matchesFilter', () => {
   const card = makeCard({ title: 'Export to CSV', description: 'For my Excel review', tags: [tag] });
 
   it('matches everything when empty', () => {
-    expect(matchesFilter(card, { tagId: null, query: '  ' })).toBe(true);
-    expect(isFiltering({ tagId: null, query: '  ' })).toBe(false);
+    expect(matchesFilter(card, { tagId: null, query: '  ', needsReview: false })).toBe(true);
+    expect(isFiltering({ tagId: null, query: '  ', needsReview: false })).toBe(false);
   });
   it('searches title, description and tag names, ignoring case', () => {
-    expect(matchesFilter(card, { tagId: null, query: 'csv' })).toBe(true);
-    expect(matchesFilter(card, { tagId: null, query: 'EXCEL' })).toBe(true);
-    expect(matchesFilter(card, { tagId: null, query: 'reporting' })).toBe(true);
-    expect(matchesFilter(card, { tagId: null, query: 'okta' })).toBe(false);
+    expect(matchesFilter(card, { tagId: null, query: 'csv', needsReview: false })).toBe(true);
+    expect(matchesFilter(card, { tagId: null, query: 'EXCEL', needsReview: false })).toBe(true);
+    expect(matchesFilter(card, { tagId: null, query: 'reporting', needsReview: false })).toBe(true);
+    expect(matchesFilter(card, { tagId: null, query: 'okta', needsReview: false })).toBe(false);
   });
+  it('can show only cards that need review', () => {
+    const waiting = makeCard({ needs_review: true });
+    expect(matchesFilter(waiting, { tagId: null, query: '', needsReview: true })).toBe(true);
+    expect(matchesFilter(card, { tagId: null, query: '', needsReview: true })).toBe(false);
+    expect(matchesFilter(card, { tagId: null, query: '', needsReview: false })).toBe(true);
+    expect(isFiltering({ tagId: null, query: '', needsReview: true })).toBe(true);
+    expect(matchesFilter(waiting, { tagId: 5, query: '', needsReview: true })).toBe(false); // filters combine
+  });
+
   it('filters by tag and combines with the search', () => {
-    expect(matchesFilter(card, { tagId: 5, query: '' })).toBe(true);
-    expect(matchesFilter(card, { tagId: 6, query: '' })).toBe(false);
-    expect(matchesFilter(card, { tagId: 5, query: 'okta' })).toBe(false);
+    expect(matchesFilter(card, { tagId: 5, query: '', needsReview: false })).toBe(true);
+    expect(matchesFilter(card, { tagId: 6, query: '', needsReview: false })).toBe(false);
+    expect(matchesFilter(card, { tagId: 5, query: 'okta', needsReview: false })).toBe(false);
   });
 });
 

@@ -5,9 +5,11 @@ interface Props {
   boards: Board[];
   boardId: number | null;
   onSelectBoard: (id: number) => void;
+  view: 'board' | 'metrics';
+  onSelectView: (view: 'board' | 'metrics') => void;
 }
 
-export function Header({ boards, boardId, onSelectBoard }: Props) {
+export function Header({ boards, boardId, onSelectBoard, view, onSelectView }: Props) {
   const { users, current, select } = useCurrentUser();
   return (
     <header className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2.5">
@@ -29,6 +31,19 @@ export function Header({ boards, boardId, onSelectBoard }: Props) {
           ))}
         </select>
       </div>
+      <nav aria-label="Views" className="flex gap-1">
+        {(['board', 'metrics'] as const).map((v) => (
+          <button
+            key={v}
+            type="button"
+            aria-current={view === v ? 'page' : undefined}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium ${view === v ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+            onClick={() => onSelectView(v)}
+          >
+            {v === 'board' ? 'Board' : 'Metrics'}
+          </button>
+        ))}
+      </nav>
       <div className="ml-auto flex items-center gap-2">
         <label htmlFor="acting-user" className="text-sm text-slate-500">
           Acting as

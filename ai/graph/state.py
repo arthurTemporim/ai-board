@@ -102,6 +102,12 @@ class GraphConfig:
     # A "duplicate" between link_threshold and merge_threshold is not trusted: a person decides.
     analysis_min_confidence: float = 0.4  # an actionable analysis below this asks a person to confirm
     comms_audiences: tuple[str, ...] = ("requester",)
+    # Cost and safety limits
+    max_llm_calls: int = 40  # model calls one run may make (a full run with top_k 5 makes about 11)
+    max_text_chars: int = 4000  # longest card text sent to a model; the rest is cut
+    max_feedback_quotes: int = 10  # feedback quotes sent to a model, each cut to 500 characters
+    tool_timeout: float = 120.0  # seconds one MCP tool call may take
+    run_timeout: float = 900.0  # seconds one run may be active before it is failed
 
     def __post_init__(self) -> None:
         for name in ("min_similarity", "link_threshold", "merge_threshold", "analysis_min_confidence"):
@@ -109,8 +115,16 @@ class GraphConfig:
                 raise ValueError(f"{name} must be between 0 and 1")
         if self.link_threshold > self.merge_threshold:
             raise ValueError("link_threshold cannot be higher than merge_threshold")
-        if not 1 <= self.top_k <= 50:
-            raise ValueError("top_k must be between 1 and 50")
+        if not 1 <= self.top_k <= 20:
+            raise ValueError("top_k must be between 1 and 20")
+        if not 1 <= self.max_llm_calls <= 500:
+            raise ValueError("max_llm_calls must be between 1 and 500")
+        if not 200 <= self.max_text_chars <= 50_000:
+            raise ValueError("max_text_chars must be between 200 and 50000")
+        if not 0 <= self.max_feedback_quotes <= 50:
+            raise ValueError("max_feedback_quotes must be between 0 and 50")
+        if self.tool_timeout <= 0 or self.run_timeout <= 0:
+            raise ValueError("timeouts must be positive")
         bad = [a for a in self.comms_audiences if a not in ("requester", "internal", "sales")]
         if bad or not self.comms_audiences:
             raise ValueError(f"comms_audiences must be a non-empty subset of requester, internal, sales (got {bad})")
@@ -122,7 +136,7 @@ class GraphConfig:
             raw = os.environ.get(f"GRAPH_{f.name.upper()}")
             if raw is None or raw == "":
                 continue
-            if f.name == "top_k":
+            if f.name in ("top_k", "max_llm_calls", "max_text_chars", "max_feedback_quotes"):
                 values[f.name] = int(raw)
             elif f.name == "comms_audiences":
                 values[f.name] = tuple(a.strip() for a in raw.split(",") if a.strip())

@@ -1,6 +1,7 @@
 """Import every model so Base.metadata is complete (Alembic and create_all rely on this)."""
 
 from core.models.ai import AIRun, Draft, Score
+from core.models.audit import AuditEntry
 from core.models.board import Board, Column
 from core.models.card import Card, CardTag, Tag
 from core.models.embedding import CardEmbedding
@@ -18,6 +19,7 @@ from core.models.user import User
 
 __all__ = [
     "AIRun",
+    "AuditEntry",
     "Board",
     "Card",
     "CardEmbedding",

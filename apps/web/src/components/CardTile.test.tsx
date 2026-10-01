@@ -42,7 +42,7 @@ describe('CardTile', () => {
   });
 
   it('flags duplicates, related requests and pending AI suggestions', () => {
-    render(<CardTile card={makeCard({ duplicate_count: 2, related_count: 1, pending_draft_count: 3 })} />);
+    render(<CardTile card={makeCard({ duplicate_count: 2, related_count: 1, pending_suggestion_count: 3, needs_review: true })} />);
     const indicators = within(screen.getByRole('list', { name: /indicators/i }));
     expect(indicators.getByText('2 possible duplicates')).toBeInTheDocument();
     expect(indicators.getByText('1 related')).toBeInTheDocument();
@@ -50,7 +50,7 @@ describe('CardTile', () => {
   });
 
   it('uses singular wording for a single duplicate or suggestion', () => {
-    render(<CardTile card={makeCard({ duplicate_count: 1, pending_draft_count: 1 })} />);
+    render(<CardTile card={makeCard({ duplicate_count: 1, pending_suggestion_count: 1, needs_review: true })} />);
     expect(screen.getByText('1 possible duplicate')).toBeInTheDocument();
     expect(screen.getByText('1 AI suggestion pending')).toBeInTheDocument();
   });
@@ -58,7 +58,7 @@ describe('CardTile', () => {
 
 describe('cardSummary', () => {
   it('describes the card for screen readers', () => {
-    const text = cardSummary(makeCard({ tags, vote_count: 3, progress: 40, duplicate_count: 1, pending_draft_count: 2 }));
+    const text = cardSummary(makeCard({ tags, vote_count: 3, progress: 40, duplicate_count: 1, pending_suggestion_count: 2, needs_review: true }));
     expect(text).toBe(
       'Support SAML single sign-on, tags: security, enterprise, 3 votes, 0 comments, 40% complete, 1 possible duplicate, 2 AI suggestions pending',
     );

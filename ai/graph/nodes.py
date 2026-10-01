@@ -24,6 +24,7 @@ from langgraph.types import interrupt
 from ai.graph.context import GraphContext
 from ai.graph.state import DEPENDENCIES, OPTIONAL_DEPENDENCIES, STEPS, WorkflowState
 from core.models import RunStatus
+from core.redact import redact
 
 VERDICTS = ("duplicate", "related", "distinct")
 
@@ -47,7 +48,7 @@ def is_requested(state: WorkflowState, step: str) -> bool:
 
 
 def _message(exc: BaseException) -> str:
-    return f"{type(exc).__name__}: {exc}"
+    return redact(f"{type(exc).__name__}: {exc}") or "error"
 
 
 async def _inputs(ctx: GraphContext, state: WorkflowState, step: str) -> tuple[dict[str, Any], str | None]:
@@ -101,10 +102,11 @@ def make_node(ctx: GraphContext, step: str, body: Body, *, selectable: bool = Tr
                 "outcome": "failed",
             }
         except Exception as exc:
-            ctx.finish_step(step_id, RunStatus.failed, error=_message(exc))
+            message = redact(_message(exc)) or "error"
+            ctx.finish_step(step_id, RunStatus.failed, error=message)
             return {
                 "statuses": {step: "failed"},
-                "errors": [{"step": step, "error": _message(exc)}],
+                "errors": [{"step": step, "error": message}],
                 "route": "continue",
             }
         ctx.finish_step(step_id, RunStatus.succeeded, output=outcome.result)
@@ -124,8 +126,8 @@ async def _context(ctx: GraphContext, state: WorkflowState) -> dict[str, Any]:
     return await ctx.tool("get_card_context", card_id=state["card_id"])
 
 
-def _quotes(context: dict[str, Any]) -> list[str]:
-    return [f["quote"] for f in context["feedback"]]
+def _quotes(ctx: GraphContext, context: dict[str, Any]) -> list[str]:
+    return ctx.quotes(context)
 
 
 def _dump(output: Any) -> dict[str, Any]:
@@ -164,8 +166,8 @@ async def analyze_need(ctx: GraphContext, state: WorkflowState, _inputs: dict, s
         {
             "requester_type": card["requester_type"],
             "card_title": card["title"],
-            "card_description": card["description"],
-            "feedback_quotes": _quotes(context),
+            "card_description": ctx.clip(card["description"]),
+            "feedback_quotes": _quotes(ctx, context),
         },
         card_id=state["card_id"],
         parent_run_id=step_id,
@@ -218,15 +220,15 @@ async def find_related(ctx: GraphContext, state: WorkflowState, inputs: dict, st
     card = context["card"]
     await ctx.tool("index_board", board_id=card["board_id"])
     similar = await ctx.tool("find_similar_cards", card_id=card_id, top_k=cfg.top_k, min_score=cfg.min_similarity)
-    confirmed = {link["card_id"] for link in context["links"] if link["status"] == "confirmed"}
+    decided = {link["card_id"] for link in context["links"] if link["status"] in ("confirmed", "rejected")}
 
     candidates: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     for hit in similar["results"]:
         entry: dict[str, Any] = {"card_id": hit["card_id"], "title": hit["title"], "similarity": hit["score"]}
         candidates.append(entry)
-        if hit["card_id"] in confirmed:
-            entry["action"] = "skip_confirmed"
+        if hit["card_id"] in decided:  # a person already decided this pair; do not ask the model again
+            entry["action"] = "skip_decided"
             continue
         try:
             other = await ctx.tool("get_card", card_id=hit["card_id"])
@@ -235,9 +237,9 @@ async def find_related(ctx: GraphContext, state: WorkflowState, inputs: dict, st
                 {
                     "similarity_score": hit["score"],
                     "card_a_title": card["title"],
-                    "card_a_description": card["description"],
+                    "card_a_description": ctx.clip(card["description"]),
                     "card_b_title": other["title"],
-                    "card_b_description": other["description"],
+                    "card_b_description": ctx.clip(other["description"]),
                 },
                 card_id=card_id,
                 parent_run_id=step_id,
@@ -362,6 +364,7 @@ async def human_checkpoint(ctx: GraphContext, state: WorkflowState, _inputs: dic
         "payload": request["payload"],
     }
     while True:
+        await asyncio.to_thread(ctx.set_output, step_id, {"question": question})
         answer = interrupt(question)
         try:
             decision = parse_decision(request, answer)
@@ -464,8 +467,10 @@ async def group_problem(ctx: GraphContext, state: WorkflowState, _inputs: dict, 
         "group_problem",
         {
             "card_title": card["title"],
-            "card_description": card["description"],
-            "existing_problems": [{"id": p["id"], "title": p["title"], "statement": p["statement"]} for p in problems],
+            "card_description": ctx.clip(card["description"]),
+            "existing_problems": [
+                {"id": p["id"], "title": p["title"][:200], "statement": p["statement"][:500]} for p in problems[:50]
+            ],
         },
         card_id=card_id,
         parent_run_id=step_id,
@@ -514,8 +519,8 @@ async def score(ctx: GraphContext, state: WorkflowState, _inputs: dict, step_id:
             "vote_count": card["vote_count"],
             "rubric": criteria,
             "card_title": card["title"],
-            "card_description": card["description"],
-            "feedback_quotes": _quotes(context),
+            "card_description": ctx.clip(card["description"]),
+            "feedback_quotes": _quotes(ctx, context),
         },
         card_id=card_id,
         parent_run_id=step_id,
@@ -569,7 +574,7 @@ async def suggest_tags(ctx: GraphContext, state: WorkflowState, _inputs: dict, s
     existing = [t["name"] for t in (await ctx.tool("list_tags", board_id=card["board_id"]))["tags"]]
     run = await ctx.prompt(
         "suggest_tags",
-        {"card_title": card["title"], "card_description": card["description"], "existing_tags": existing},
+        {"card_title": card["title"], "card_description": ctx.clip(card["description"]), "existing_tags": existing},
         card_id=card_id,
         parent_run_id=step_id,
     )
@@ -616,7 +621,7 @@ async def decision_brief(ctx: GraphContext, state: WorkflowState, inputs: dict, 
                 "ratings": scored["ratings"],
             },
             "card_title": card["title"],
-            "card_description": card["description"],
+            "card_description": ctx.clip(card["description"]),
             "analysis": {
                 k: analysis.get(k)
                 for k in ("underlying_need", "problem_statement", "is_actionable", "clarifying_questions")

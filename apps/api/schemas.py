@@ -147,6 +147,8 @@ class CardRead(Output):
     duplicate_count: int
     related_count: int
     pending_draft_count: int
+    pending_suggestion_count: int
+    needs_review: bool
 
 
 class BoardColumnView(ColumnRead):
@@ -260,3 +262,141 @@ class VoteSummaryRead(Output):
     card_id: int
     vote_count: int
     voted: bool
+
+
+# ---- workflows ----------------------------------------------------------------------------
+class TriageCard(Input):
+    """A new card to create and triage in one call."""
+
+    board_id: int
+    title: Title
+    description: str = Field("", max_length=10000)
+    requester_type: RequesterType = RequesterType.unknown
+    column_id: int | None = None
+    tag_ids: list[int] = Field(default_factory=list, max_length=20)
+
+
+class TriageRequest(Input):
+    card_id: int | None = Field(None, ge=1, description="Triage this existing card")
+    card: TriageCard | None = Field(None, description="Or create this card first, then triage it")
+    steps: list[str] | None = Field(
+        None,
+        max_length=8,
+        description="Steps to run (names or aliases such as analyze, score, tags); omit to run every step",
+    )
+
+    @model_validator(mode="after")
+    def _exactly_one_target(self):
+        if (self.card_id is None) == (self.card is None):
+            raise ValueError("Give exactly one of card_id or card")
+        return self
+
+
+class StepRequest(Input):
+    card_id: int | None = Field(None, ge=1)
+    card: TriageCard | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_target(self):
+        if (self.card_id is None) == (self.card is None):
+            raise ValueError("Give exactly one of card_id or card")
+        return self
+
+
+class RunAccepted(BaseModel):
+    run_id: int
+    card_id: int
+    status: str
+    steps_requested: list[str] | None
+    card_created: bool
+
+
+class RunStep(BaseModel):
+    name: str
+    status: str = Field(description="pending | running | succeeded | failed | skipped | awaiting_human | not_requested")
+    requested: bool
+    route: bool = False
+    started_at: datetime | None
+    finished_at: datetime | None
+    latency_ms: int | None
+    result: dict | None = None
+    error: str | None = None
+    reason: str | None = Field(None, description="Why a step was skipped")
+
+
+class RunProgress(BaseModel):
+    done: int
+    total: int
+
+
+class RunRead(BaseModel):
+    run_id: int
+    card_id: int | None
+    status: str = Field(description="running | awaiting_human | succeeded | failed")
+    outcome: str | None = Field(None, description="completed | needs_info | duplicate_proposed | failed")
+    steps: list[RunStep]
+    progress: RunProgress
+    pending_action: dict | None = Field(None, description="The question a person must answer to resume the run")
+    human_decisions: list[dict]
+    errors: list[dict]
+    created_at: datetime
+    finished_at: datetime | None
+
+
+class RunSummary(BaseModel):
+    run_id: int
+    card_id: int | None
+    status: str
+    outcome: str | None
+    created_at: datetime
+    finished_at: datetime | None
+
+
+class ResumeRequest(Input):
+    decision: dict = Field(
+        description='Answer to pending_action, e.g. {"verdict": "duplicate"} or {"actionable": true}'
+    )
+
+
+# ---- suggestions ---------------------------------------------------------------------------
+class SuggestionRead(BaseModel):
+    id: str = Field(description="draft:N, link:N or problem:CARD:PROBLEM")
+    type: str
+    status: str
+    confidence: float | None
+    rationale: str | None
+    data: dict
+    created_at: datetime
+    run_id: int | None
+    editable: list[str]
+
+
+class ScoreOverride(Input):
+    ratings: dict[str, int] = Field(min_length=1, max_length=12, description="criterion key -> new rating")
+    reason: str = Field(min_length=3, max_length=500, description="Why the AI's ratings are wrong (required)")
+
+
+class AcceptRequest(Input):
+    edits: dict | None = Field(None, description="New values for the suggestion's editable fields")
+    override: ScoreOverride | None = Field(None, description="Score suggestions only: change ratings, with a reason")
+
+
+class RejectRequest(Input):
+    reason: str | None = Field(None, max_length=500)
+
+
+class DecisionRead(BaseModel):
+    suggestion_id: str
+    status: str
+    message: str
+    effects: dict
+    audit_id: int | None
+
+
+class AuditRead(Output):
+    id: int
+    card_id: int | None
+    actor_id: int | None
+    action: str
+    detail: dict
+    created_at: datetime

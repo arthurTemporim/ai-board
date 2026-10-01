@@ -18,6 +18,7 @@ class LinkKind(StrEnum):
 class LinkStatus(StrEnum):
     suggested = "suggested"
     confirmed = "confirmed"
+    rejected = "rejected"  # a person said no; AI re-runs must not propose it again
 
 
 class DraftKind(StrEnum):

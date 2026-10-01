@@ -253,5 +253,5 @@ async def test_a_confirmed_link_is_not_judged_again(db, make_workflow):
     async with make_workflow() as wf:
         report = await wf.start(duplicate_id, steps="related")
     entry = next(c for c in report.results["find_related"]["candidates"] if c["card_id"] == db.ids["saml"])
-    assert entry["action"] == "skip_confirmed" and "verdict" not in entry
+    assert entry["action"] == "skip_decided" and "verdict" not in entry
     assert report.outcome == "completed"

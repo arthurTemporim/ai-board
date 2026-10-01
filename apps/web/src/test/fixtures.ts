@@ -21,6 +21,8 @@ export function makeCard(overrides: Partial<Card> = {}): Card {
     duplicate_count: 0,
     related_count: 0,
     pending_draft_count: 0,
+    pending_suggestion_count: 0,
+    needs_review: false,
     ...overrides,
   };
 }

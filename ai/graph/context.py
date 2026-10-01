@@ -11,8 +11,8 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, aliased, sessionmaker
 
 from ai.graph.state import GraphConfig
 from ai.llm.factory import StructuredLLM
@@ -22,6 +22,12 @@ from ai.mcp_servers.client import MCPToolkit
 from core.db import session_scope
 from core.models import AIRun, Card, RunStatus
 from core.models.types import utcnow
+from core.redact import redact
+
+
+class BudgetExceededError(RuntimeError):
+    """A run tried to make more model calls than it is allowed."""
+
 
 STEP_PREFIX = "step:"
 WORKFLOW_KIND = "workflow"
@@ -45,12 +51,46 @@ class GraphContext:
 
     # ---- data and models ------------------------------------------------------------------
     async def tool(self, name: str, **arguments: Any) -> Any:
-        """Call an MCP tool; a tool error raises ToolException."""
-        return await self.toolkit.call(name, **arguments)
+        """Call an MCP tool; a tool error raises ToolException, a hung tool raises TimeoutError."""
+        try:
+            return await asyncio.wait_for(self.toolkit.call(name, **arguments), self.config.tool_timeout)
+        except TimeoutError as exc:
+            raise TimeoutError(f"MCP tool '{name}' did not answer within {self.config.tool_timeout:g}s") from exc
+
+    # ---- limits ---------------------------------------------------------------------------
+    def clip(self, text: str) -> str:
+        """Cut card text to the configured length before it goes to a model (cost and context limit)."""
+        limit = self.config.max_text_chars
+        return text if len(text) <= limit else text[:limit].rstrip() + " [truncated]"
+
+    def quotes(self, context: dict[str, Any]) -> list[str]:
+        """Feedback quotes for a prompt: at most max_feedback_quotes, each at most 500 characters."""
+        quotes = [f["quote"] for f in context["feedback"]][: self.config.max_feedback_quotes]
+        return [q if len(q) <= 500 else q[:500].rstrip() + " [truncated]" for q in quotes]
+
+    def check_budget(self, step_id: int) -> None:
+        """Raise if the run this step belongs to has used its model-call budget."""
+        with session_scope(self.session_factory) as session:
+            run_id = session.scalar(select(AIRun.parent_run_id).where(AIRun.id == step_id))
+            if run_id is None:
+                return
+            calls = (
+                session.scalar(
+                    select(func.count(AIRun.id))
+                    .join(step_alias := aliased(AIRun), AIRun.parent_run_id == step_alias.id)
+                    .where(step_alias.parent_run_id == run_id, AIRun.prompt_name.is_not(None))
+                )
+                or 0
+            )
+        if calls >= self.config.max_llm_calls:
+            raise BudgetExceededError(
+                f"This run has made {calls} model calls, its limit (max_llm_calls={self.config.max_llm_calls})"
+            )
 
     async def prompt(self, name: str, variables: dict[str, Any], *, card_id: int, parent_run_id: int) -> RunResult:
         """Run a prompt and log it under the step. Runs in a thread so the event loop (which also
         serves the MCP connections) is not blocked for the length of a slow model call."""
+        await asyncio.to_thread(self.check_budget, parent_run_id)
         return await asyncio.to_thread(
             run_prompt_logged,
             name,
@@ -105,9 +145,16 @@ class GraphContext:
             if row is None:
                 return
             now = utcnow()
-            row.status, row.output, row.error, row.finished_at = status, output, error, now
+            row.status, row.output, row.error, row.finished_at = status, output, redact(error), now
             row.confidence = (output or {}).get("confidence") if isinstance(output, dict) else None
             row.latency_ms = round((now - row.created_at).total_seconds() * 1000)
+
+    def set_output(self, step_id: int, output: dict[str, Any]) -> None:
+        """Store interim output on a step row (the question a paused checkpoint is waiting on)."""
+        with session_scope(self.session_factory) as session:
+            row = session.get(AIRun, step_id)
+            if row is not None:
+                row.output = output
 
     def record_skipped(self, run_id: int, card_id: int, step: str, reason: str) -> None:
         with session_scope(self.session_factory) as session:

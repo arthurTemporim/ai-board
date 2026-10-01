@@ -30,5 +30,9 @@ class ForbiddenError(DomainError):
     code = "forbidden"
 
 
+class RateLimitError(DomainError):
+    code = "too_many_runs"
+
+
 class UnauthorizedError(DomainError):
     code = "actor_required"

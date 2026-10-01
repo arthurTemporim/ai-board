@@ -61,6 +61,7 @@ def _link_count(kind: LinkKind):
         .where(
             (CardLink.card_id == Card.id) | (CardLink.other_card_id == Card.id),
             CardLink.kind == kind,
+            CardLink.status != LinkStatus.rejected,
         )
         .correlate_except(CardLink)
         .scalar_subquery()
@@ -70,3 +71,21 @@ def _link_count(kind: LinkKind):
 # Drive the duplicate / related indicators on cards (suggested and confirmed links both count).
 Card.duplicate_count = _link_count(LinkKind.duplicate)
 Card.related_count = _link_count(LinkKind.related)
+
+
+# Suggestions waiting for a person, for the "needs review" filter and the card indicator.
+Card.suggested_link_count = column_property(
+    select(func.count(CardLink.id))
+    .where(
+        (CardLink.card_id == Card.id) | (CardLink.other_card_id == Card.id),
+        CardLink.status == LinkStatus.suggested,
+    )
+    .correlate_except(CardLink)
+    .scalar_subquery()
+)
+Card.suggested_problem_count = column_property(
+    select(func.count(CardProblem.problem_id))
+    .where(CardProblem.card_id == Card.id, CardProblem.status == LinkStatus.suggested)
+    .correlate_except(CardProblem)
+    .scalar_subquery()
+)

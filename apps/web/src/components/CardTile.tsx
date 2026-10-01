@@ -23,7 +23,8 @@ export function cardSummary(card: Card): string {
   if (card.progress > 0) parts.push(`${card.progress}% complete`);
   if (card.duplicate_count) parts.push(plural(card.duplicate_count, 'possible duplicate'));
   if (card.related_count) parts.push(`${card.related_count} related`);
-  if (card.pending_draft_count) parts.push(`${plural(card.pending_draft_count, 'AI suggestion')} pending`);
+  if (card.needs_review && !card.pending_suggestion_count) parts.push('AI is waiting for your answer');
+  if (card.pending_suggestion_count) parts.push(`${plural(card.pending_suggestion_count, 'AI suggestion')} pending`);
   return parts.join(', ');
 }
 
@@ -34,8 +35,10 @@ export function CardTile({ card, isDragging = false, isOverlay = false }: Props)
     indicators.push({ key: 'dup', label: plural(card.duplicate_count, 'possible duplicate'), icon: <CopyIcon />, tone: 'bg-amber-50 text-amber-800' });
   if (card.related_count > 0)
     indicators.push({ key: 'rel', label: `${card.related_count} related`, icon: <LinkIcon />, tone: 'bg-sky-50 text-sky-800' });
-  if (card.pending_draft_count > 0)
-    indicators.push({ key: 'ai', label: `${card.pending_draft_count} AI suggestion${card.pending_draft_count === 1 ? '' : 's'} pending`, icon: <SparkleIcon />, tone: 'bg-violet-50 text-violet-800' });
+  if (card.needs_review && card.pending_suggestion_count === 0)
+    indicators.push({ key: 'wait', label: 'AI is waiting for your answer', icon: <SparkleIcon />, tone: 'bg-amber-50 text-amber-800' });
+  if (card.pending_suggestion_count > 0)
+    indicators.push({ key: 'ai', label: `${card.pending_suggestion_count} AI suggestion${card.pending_suggestion_count === 1 ? '' : 's'} pending`, icon: <SparkleIcon />, tone: 'bg-violet-50 text-violet-800' });
 
   return (
     <article
